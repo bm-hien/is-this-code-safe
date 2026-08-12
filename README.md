@@ -48,7 +48,11 @@ compute, and a tiny domain language model trained from scratch.
   masked-behavior-token objectives. It downloads no foundation-model weights.
 - Skips symlinks and common dependency/build folders; bounds files, bytes, and
   emitted events.
-- Provides training, evaluation, lint, tests, and reproducible CPU benchmarks.
+- Audits metadata-only dataset manifests for artifact, group, family,
+  campaign, time, and post-MalIR representation leakage.
+- Evaluates locked predictions with validation-only thresholds, low-FPR power
+  bounds, group bootstrap, calibration, and tie-aware risk-coverage/AURC.
+- Provides training, lint, tests, and reproducible CPU benchmarks.
 
 ## Quick start
 
@@ -93,6 +97,8 @@ itcs extract PATH [--compact]
 itcs train-sparse DATASET -o MODEL
 itcs train-micro DATASET -o CHECKPOINT
 itcs benchmark PATH [--repeats N]
+itcs audit-manifest MANIFEST [--strict] [--json]
+itcs evaluate-predictions PREDICTIONS [--target-fpr RATE] [--json]
 ~~~
 
 Use --fail-on review, suspicious, or high-risk to make scan return exit code 2
@@ -109,6 +115,25 @@ JSONL training rows accept one of these forms:
 
 The bundled 32-row dataset is deliberately synthetic and exists only for smoke
 training. Do not report its training accuracy as real-world efficacy.
+
+## Leakage-aware research evaluation
+
+The audit path reads metadata only; it never follows a sample path or opens an
+archive. The bundled research manifest and predictions are synthetic examples:
+
+~~~bash
+.venv/bin/itcs audit-manifest examples/research_manifest.jsonl \
+  --strict --json
+.venv/bin/itcs evaluate-predictions examples/research_predictions.jsonl \
+  --target-fpr 0.001 --bootstrap 2000 --seed 0 --json
+~~~
+
+The evaluator chooses a threshold on validation and applies it unchanged to
+test. It reports calibration and confidence-ranking metrics separately. Even
+with zero false positives, a one-sided 95% upper bound below 0.1% requires at
+least 2,995 independent benign groups; the command labels smaller tests
+underpowered.
+See [the research data contract](docs/RESEARCH_DATA_FORMAT.md).
 
 ## Measured on the target Codespace
 
@@ -127,12 +152,13 @@ were taken on 2026-08-12.
 
 The corpus benchmark uses repeated inert templates (95% ordinary and 5%
 suspicious-shaped source). These numbers measure cost, not detection quality.
-Use scripts/evaluate.py on a project-disjoint, time-split real dataset before
-making efficacy claims.
+Export predictions on a project-disjoint, time-split real dataset, audit the
+manifest, and use `itcs evaluate-predictions` before making efficacy claims.
 
 ~~~bash
 .venv/bin/python scripts/benchmark_corpus.py --files 1000 --repeats 5
 .venv/bin/python scripts/benchmark_micro.py artifacts/micro.pt --repeats 300
+# Checkpoint plumbing smoke test only; never use this line for efficacy claims.
 .venv/bin/python scripts/evaluate.py examples/synthetic_train.jsonl \
   --micro-model artifacts/micro.pt
 ~~~
@@ -152,12 +178,15 @@ Motifs are bounded proximity evidence, not exact interprocedural data flow.
 
 - docs/RESEARCH.vi.md: bản nghiên cứu và roadmap tiếng Việt.
 - docs/EVALUATION_PROTOCOL.md: locked leakage/metrics/CPU study protocol.
+- docs/RESEARCH_DATA_FORMAT.md: manifest and prediction JSONL contracts.
 - CONTRIBUTING.md: safe contribution and research-claim rules.
 - src/malir/extractor.py: safe AST extraction and alias resolution.
 - src/malir/motifs.py: bounded behavior-path construction.
 - src/malir/detector.py: evidence weights and uncertainty gate.
 - src/malir/model.py: dependency-free online sparse classifier.
 - src/malir/microlm.py: tiny Transformer and training loop.
+- src/malir/manifest.py: metadata audit and representation leakage checks.
+- src/malir/evaluation.py: low-FPR, calibration, AURC, and group bootstrap.
 - docs/MALIR_SPEC.md: IR contract and versioning.
 - docs/RESEARCH.md: literature gap, experiments, and claim gates.
 - docs/THREAT_MODEL.md: security boundary and known evasions.

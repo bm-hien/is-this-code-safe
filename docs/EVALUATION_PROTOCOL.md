@@ -10,8 +10,10 @@ malicious-package triage under a CPU budget. It is designed to prevent three
 common failures:
 
 1. package or malware-family leakage between train and test;
-2. impressive F1 on a balanced toy set but unusable false-positive rates;
-3. quality comparisons that ignore extraction and explanation cost.
+2. distinct artifacts collapsing to the same model-visible representation;
+3. impressive F1 on a balanced toy set but unusable false-positive rates;
+4. a calibrated score whose confidence cannot rank errors for abstention;
+5. quality comparisons that ignore extraction and explanation cost.
 
 Synthetic fixtures in this repository validate mechanics only. They are never
 part of a reported efficacy result.
@@ -25,8 +27,8 @@ Record these fields in the experiment report:
 | study_id | Immutable identifier |
 | hypothesis | One primary hypothesis |
 | repository_commit | Full ITCS commit SHA |
-| dataset_manifest_sha256 | Hash of the frozen manifest |
-| split_manifest_sha256 | Hash of assigned samples |
+| manifest_fingerprint | Canonical hash emitted by `itcs audit-manifest` |
+| split_manifest_sha256 | Hash of the immutable assigned-sample file |
 | collection_cutoff | UTC date fixed before testing |
 | seeds | Complete list |
 | target_hardware | CPU model, cores, RAM, OS |
@@ -56,7 +58,9 @@ manifest with metadata, not an archive checked into git. Each row must contain:
   "campaign": null,
   "provenance": "curator/source record",
   "license": "evaluation permission",
-  "content_kind": "source-tree"
+  "content_kind": "source-tree",
+  "split": "train",
+  "representation_hash": "SHA-256 of final model-visible MalIR"
 }
 ~~~
 
@@ -112,6 +116,13 @@ Deduplicate in this order:
 
 Keep a map from removed duplicates to the canonical sample. Report counts at
 each stage. Tune near-duplicate thresholds on development data only.
+
+After preprocessing is frozen, compute `representation_hash` from the exact
+ordered MalIR/token sequence visible to the model. Run `itcs audit-manifest`
+after split assignment and reject any artifact SHA, `group_id`, or
+`representation_hash` crossing splits. Family/campaign overlap is at least a
+warning and is fatal for a family-disjoint study. This post-transform audit is
+required even for a clean forward-time split.
 
 ## 7. Locked split policy
 
@@ -171,8 +182,11 @@ them before loading test labels. Save the decision threshold, uncertainty
 gates, preprocessing version, and model checkpoint hash.
 
 Calibrate probabilities with a validation-only method if needed. Report Brier
-score, expected calibration error, and reliability bins. If calibration drifts
-by month, report the drift rather than retuning on test data.
+score, expected calibration error, and reliability bins. Separately report the
+risk-coverage curve and AURC: calibration does not prove that confidence ranks
+errors correctly. Preserve whole confidence-tie groups in coverage points. If
+calibration or rejection rate drifts by month, report the drift rather than
+retuning on test labels.
 
 For the cascade, report:
 
@@ -200,7 +214,21 @@ report:
 
 With too few benign samples to estimate 0.1% FPR, state that the metric is
 underpowered. Do not round zero observed false positives into a zero population
-rate; report a confidence bound.
+rate; report a one-sided confidence bound.
+
+For zero false-positive groups in `n` independent benign groups, the exact
+one-sided upper bound at confidence `c` is:
+
+~~~text
+upper = 1 - (1 - c) ** (1 / n)
+~~~
+
+At 95% confidence, demonstrating an upper bound of 0.1% requires at least 2,995
+independent benign groups even when all are classified correctly. The 200
+benign Python packages in OMCBench cannot establish that claim. If several
+versions share a `group_id`, report both package-row FPR and the conservative
+rate of groups with any false alert; the claim gate uses the group bound. For
+non-zero events, report a declared interval method and the raw counts.
 
 ## 11. Uncertainty and statistics
 
@@ -299,6 +327,18 @@ Before final evaluation:
 5. run a leakage report and resolve every violation;
 6. execute the test exactly once for the primary report;
 7. preserve raw predictions for independent metric recomputation.
+
+The repository's metadata-only audit path is:
+
+~~~bash
+itcs audit-manifest manifest.jsonl --strict --json
+itcs evaluate-predictions predictions.jsonl \
+  --target-fpr 0.001 --bootstrap 2000 --seed 0 --json
+~~~
+
+The evaluator derives confidence from the malicious probability, chooses the
+decision threshold on rows marked `validation`, and applies it unchanged to
+rows marked `test`. It bootstraps `group_id`, not individual rows.
 
 Additional test runs after viewing results are exploratory and must be labeled.
 

@@ -34,7 +34,11 @@ với signature, sandbox hoặc analyst; không nên tự nhận là antivirus h
 | MalGuard | 132 feature + RF/XGBoost mạnh | Thêm thứ tự hành vi và evidence |
 | MOLOT | Call graph + BERT + SHAP | Loại full call graph/SHAP khỏi common path |
 | MalTotal | Semantic slicing có LLM hỗ trợ | Pipeline local không phụ thuộc LLM lớn |
-| OMCBench | Benchmark Python/JavaScript mở | Bổ sung time/campaign split và hard negatives |
+| PyGuard | Mining behavior từ false positive/negative + LLM abstraction | Hard negative và ranh giới ngữ cảnh, nhưng novelty này đã có |
+| PYPILINE | AST/API graph + knowledge base + agent/RAG | Học API context, nhưng không hợp mục tiêu offline 2 CPU |
+| Leakage study | Temporal split vẫn có thể trùng representation | Audit cả representation sau khi sinh MalIR |
+| Aurora | Risk-coverage/AURC và độ ổn định khi drift | Không dùng ECE để biện minh cho uncertainty gate |
+| OMCBench | 200 benign + 200 malicious cho mỗi ecosystem | Chỉ đủ pilot, không đủ chứng minh FPR 0,1% |
 
 Điểm cần nói thật: behavior sequence không mới. µMal nhỏ cũng chưa đủ là novelty.
 Đóng góp có thể công bố nằm ở tổ hợp:
@@ -44,6 +48,24 @@ với signature, sandbox hoặc analyst; không nên tự nhận là antivirus h
 3. extraction bị chặn tài nguyên và không chạy code;
 4. selective/conditional inference theo vùng bất định;
 5. đánh giá low-FPR, temporal drift và chi phí CPU cùng lúc.
+
+### Phát hiện mới làm thay đổi thiết kế thí nghiệm
+
+- Time split chỉ ngăn “nhìn tương lai”, không ngăn hai artifact khác nhau bị
+  phép biến đổi mất thông tin nén thành cùng feature/MalIR. Vì vậy manifest phải
+  khóa SHA-256 của artifact và `representation_hash` của đúng chuỗi token mà
+  model thấy, rồi audit cả hai sau khi gán split.
+- Calibration và khả năng xếp hạng độ không chắc là hai câu hỏi khác nhau. Một
+  model cho mọi mẫu score 0,5 có thể có ECE bằng 0 trên tập cân bằng nhưng không
+  biết ca nào nên chuyển analyst. ITCS vì vậy đo cả Brier/ECE và
+  risk-coverage/AURC, đồng thời giữ nguyên toàn bộ nhóm score bằng nhau.
+- “0 false positive” không có nghĩa FPR thật bằng 0. Với n nhóm benign độc lập
+  và không có lỗi, cận trên một phía 95% là `1 - 0,05 ** (1/n)`. Muốn cận này
+  không quá 0,1% cần ít nhất 2.995 nhóm benign. OMCBench Python chỉ có 200
+  benign nên chỉ làm pilot; nó không đủ lực thống kê cho claim low-FPR.
+
+Repo hiện có `itcs audit-manifest` và `itcs evaluate-predictions` để biến ba
+điều trên thành kiểm tra tự động, không đụng vào nội dung malware.
 
 ## Những gì đã triển khai
 
@@ -89,6 +111,26 @@ masked-behavior-token prediction từ đầu, không tải foundation model.
 Rule score nằm ngoài 20–80 thì không gọi model. Đây là conditional compute:
 chi phí trung bình bằng extraction cộng tỷ lệ ca bất định nhân chi phí µMal.
 
+### Lớp audit và evaluation mới
+
+Manifest JSONL chỉ chứa metadata, bị giới hạn kích thước, từ chối payload/path
+mẫu và không mở archive. Audit bắt duplicate ID/SHA, conflicting label,
+group/family/campaign qua split, temporal overlap và representation leakage; nó
+cũng sinh fingerprint canonical cho experiment record.
+
+Prediction evaluator bắt buộc có validation/test. Threshold tại target FPR chỉ
+được chọn trên validation rồi khóa khi áp dụng test. Báo cáo gồm raw confusion
+count, AP, Brier, ECE, AURC, risk tại nhiều coverage, group bootstrap, metric
+theo thời gian, tỷ lệ gọi µMal và cận tin cậy FPR.
+
+~~~bash
+itcs audit-manifest examples/research_manifest.jsonl --strict --json
+itcs evaluate-predictions examples/research_predictions.jsonl \
+  --target-fpr 0.001 --bootstrap 2000 --seed 0 --json
+~~~
+
+Hai file ví dụ đều tổng hợp; không phải kết quả detection.
+
 ## Kết quả trên codespaces-a90760
 
 Máy: 2 vCPU, khoảng 8 GB RAM, Python 3.12.1, Linux x86-64.
@@ -101,7 +143,7 @@ Máy: 2 vCPU, khoảng 8 GB RAM, Python 3.12.1, Linux x86-64.
 | Sparse checkpoint | 7.259 byte |
 | µMal FP32 checkpoint | 2.280.321 byte |
 | µMal inference, 2 thread | median 6,49 ms; p95 12,50 ms |
-| Test | 21 test pass |
+| Test | 45 test pass |
 | Môi trường train PyTorch | 992 MB; không cần cho core/sparse |
 
 Corpus benchmark là template trơ với 95% mẫu thông thường và 5% source có hình
@@ -155,7 +197,8 @@ không cố giữ vì tên gọi LLM.
 - recall tại FPR 0,1% và 1%;
 - PR-AUC / average precision;
 - số false alert trên 10.000 package benign;
-- calibration Brier/ECE;
+- calibration Brier/ECE và confidence ranking bằng risk-coverage/AURC;
+- cận trên một phía cho FPR và cảnh báo thiếu lực thống kê;
 - median/p95/p99 latency và CPU-second trên 1.000 package;
 - peak RSS, model size, tỷ lệ package đi vào uncertainty gate;
 - evidence precision, deletion faithfulness và thời gian analyst review.
@@ -178,12 +221,13 @@ Nếu chưa đạt các cổng này, mô tả đúng là “prototype nghiên c�
 
 1. Viết worker ingest OMCBench an toàn bên ngoài Codespace.
 2. Thêm bounded local value-flow và function summaries cho Python.
-3. Tạo hard-negative corpus đủ lớn và forward time split.
-4. Chạy baseline/ablation bằng scripts/evaluate.py.
-5. Calibrate gate để đo p_uncertain thật.
+3. Dùng OMCBench làm pilot, rồi tạo hard-negative corpus ít nhất đủ lực cho FPR.
+4. Chạy baseline/ablation, audit manifest và khóa prediction trước khi tính metric.
+5. Calibrate gate trên validation; đo AURC và reject-rate drift thật.
 6. Chỉ sau đó mới thử INT8 và frontend JavaScript.
 
 Bản kế hoạch tiếng Anh đầy đủ, nguồn tham khảo và claim gates nằm trong
-[RESEARCH.md](RESEARCH.md). Đặc tả IR nằm trong
+[RESEARCH.md](RESEARCH.md). Contract manifest/prediction nằm trong
+[RESEARCH_DATA_FORMAT.md](RESEARCH_DATA_FORMAT.md), đặc tả IR nằm trong
 [MALIR_SPEC.md](MALIR_SPEC.md), còn ranh giới an toàn nằm trong
 [THREAT_MODEL.md](THREAT_MODEL.md).

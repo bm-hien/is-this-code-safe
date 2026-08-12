@@ -10,6 +10,8 @@ from pathlib import Path
 from . import __version__
 from .benchmark import benchmark_scan
 from .data import load_examples
+from .evaluation import evaluation_report, load_predictions
+from .manifest import audit_manifest_path
 from .model import OnlineLogisticModel
 from .scanner import ScanLimits, Scanner
 
@@ -81,6 +83,24 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("path")
     bench.add_argument("--repeats", type=int, default=20)
     bench.add_argument("--json", action="store_true", dest="as_json")
+
+    audit = commands.add_parser(
+        "audit-manifest",
+        help="audit metadata for dataset leakage",
+    )
+    audit.add_argument("manifest", help="metadata-only JSONL manifest")
+    audit.add_argument("--strict", action="store_true")
+    audit.add_argument("--json", action="store_true", dest="as_json")
+
+    evaluate = commands.add_parser(
+        "evaluate-predictions",
+        help="evaluate locked validation/test prediction rows",
+    )
+    evaluate.add_argument("predictions", help="prediction JSONL")
+    evaluate.add_argument("--target-fpr", type=float, default=0.001)
+    evaluate.add_argument("--bootstrap", type=int, default=2_000)
+    evaluate.add_argument("--seed", type=int, default=0)
+    evaluate.add_argument("--json", action="store_true", dest="as_json")
     return parser
 
 
@@ -98,9 +118,62 @@ def main(argv: list[str] | None = None) -> int:
             return _train_micro(args)
         if args.command == "benchmark":
             return _benchmark(args)
+        if args.command == "audit-manifest":
+            return _audit_manifest(args)
+        if args.command == "evaluate-predictions":
+            return _evaluate_predictions(args)
     except (OSError, ValueError, RuntimeError) as error:
         parser.error(str(error))
     return 1
+
+
+def _audit_manifest(args: argparse.Namespace) -> int:
+    report = audit_manifest_path(args.manifest)
+    if args.as_json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        print(
+            f"{report['rows']} rows | {report['errors']} errors | "
+            f"{report['warnings']} warnings | "
+            f"fingerprint {report['manifest_fingerprint'][:12]}"
+        )
+        for issue in report["issues"]:
+            print(f"- {issue['severity']}: {issue['code']}: {issue['message']}")
+    failed = report["errors"] > 0 or (args.strict and report["warnings"] > 0)
+    return 2 if failed else 0
+
+
+def _evaluate_predictions(args: argparse.Namespace) -> int:
+    report = evaluation_report(
+        load_predictions(args.predictions),
+        target_fpr=args.target_fpr,
+        bootstrap=args.bootstrap,
+        seed=args.seed,
+    )
+    if args.as_json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        selection = report["selection"]
+        test = report["test"]
+        evidence = report["fpr_evidence"]
+        print(
+            f"threshold {selection['threshold']:.6g} selected on validation | "
+            f"test recall {test['recall']:.3f} | "
+            f"test FPR {test['false_positive_rate']:.6f}"
+        )
+        support = "supported" if evidence["target_supported"] else "underpowered"
+        print(
+            f"{support}: one-sided {evidence['confidence']:.0%} FPR upper bound "
+            f"{evidence['upper_confidence_bound']:.6f}; "
+            f"{evidence['minimum_independent_benign_groups_if_zero_fp']} "
+            "independent benign groups needed at zero false positives"
+        )
+        print(
+            f"AP {test['average_precision']:.3f} | "
+            f"AURC {report['selective']['decision_margin']['aurc']:.3f} | "
+            f"bootstrap groups {report['bootstrap']['successful']}"
+        )
+    return 0
 
 
 def _scanner_from_args(args: argparse.Namespace) -> Scanner:
