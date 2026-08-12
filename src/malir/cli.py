@@ -22,6 +22,23 @@ EXIT_THRESHOLDS = {
     "high-risk": 75.0,
 }
 
+COMMANDS = {
+    "scan",
+    "extract",
+    "train-sparse",
+    "train-micro",
+    "benchmark",
+    "audit-manifest",
+    "evaluate-predictions",
+}
+
+ASSESSMENTS = {
+    "low-signal": "NO MALWARE EVIDENCE",
+    "review": "NEEDS REVIEW",
+    "suspicious": "MALWARE-LIKE",
+    "high-risk": "MALWARE-LIKE",
+}
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -106,7 +123,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    values = list(sys.argv[1:] if argv is None else argv)
+    if values and not values[0].startswith("-") and values[0] not in COMMANDS:
+        values.insert(0, "scan")
+    args = parser.parse_args(values)
     try:
         if args.command == "scan":
             return _scan(args)
@@ -292,8 +312,9 @@ def _benchmark(args: argparse.Namespace) -> int:
 
 
 def _print_report(report) -> None:
+    assessment = ASSESSMENTS[report.verdict]
     print(
-        f"{report.verdict} | risk {report.risk_score:.1f}/100 | "
+        f"{assessment} | {report.verdict} | risk {report.risk_score:.1f}/100 | "
         f"{report.files_scanned} Python files | {report.elapsed_ms:.1f} ms"
     )
     model_state = (

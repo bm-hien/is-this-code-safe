@@ -1,6 +1,7 @@
 # Is this code safe? - ITCS
 
 [![CI](https://github.com/bm-hien/is-this-code-safe/actions/workflows/ci.yml/badge.svg)](https://github.com/bm-hien/is-this-code-safe/actions/workflows/ci.yml)
+[![GitHub Pages](https://github.com/bm-hien/is-this-code-safe/actions/workflows/pages.yml/badge.svg)](https://bm-hien.github.io/is-this-code-safe/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -8,6 +9,8 @@
 of Python source code. It converts source into a compact Malware Intermediate
 Representation (MalIR), preserves line-level evidence, and spends model compute
 only on uncertain cases.
+
+**[Try the browser-local GitHub Pages demo →](https://bm-hien.github.io/is-this-code-safe/)**
 
 > This is not a VirusTotal replacement yet, and it is not an antivirus verdict.
 > It is a local source-analysis layer for triage and research. Never install,
@@ -46,6 +49,8 @@ compute, and a tiny domain language model trained from scratch.
 - Includes a dependency-free hashed online logistic classifier.
 - Includes µMal: a 567,746-parameter Transformer with joint classification and
   masked-behavior-token objectives. It downloads no foundation-model weights.
+- Ships a GitHub Pages demo with MalIR-Lite and µMal Nano, a 3,538-parameter
+  behavior Transformer that runs entirely inside the browser.
 - Skips symlinks and common dependency/build folders; bounds files, bytes, and
   emitted events.
 - Audits metadata-only dataset manifests for artifact, group, family,
@@ -61,9 +66,14 @@ Core scanning needs only Python 3.11 or newer:
 ~~~bash
 cd /workspaces/codespaces-blank
 make bootstrap
-.venv/bin/itcs scan tests/fixtures/suspicious/static_exfil.py
-.venv/bin/itcs extract tests/fixtures/benign
+.venv/bin/itcs tests/fixtures/suspicious/static_exfil.py
+.venv/bin/itcs tests/fixtures/benign --json
 ~~~
+
+A path as the first argument is shorthand for `itcs scan PATH`. Results begin
+with `MALWARE-LIKE`, `NEEDS REVIEW`, or `NO MALWARE EVIDENCE` and retain the
+supporting operations and line numbers. The last label means only that this
+analyzer found little evidence; it is not proof of safety.
 
 The current Codespace is already bootstrapped. Use make bootstrap-locked to
 reproduce its Linux x86-64 / CPython 3.12 dependency snapshot. For a fresh
@@ -89,9 +99,32 @@ Train the much smaller online model:
 The model is invoked only when the rule score is between 20 and 80 by default.
 Clear low-signal and high-risk cases avoid that cost.
 
+## Browser demo
+
+The [GitHub Pages demo](https://bm-hien.github.io/is-this-code-safe/) accepts
+pasted source or a local `.py` file. It performs all analysis in the tab and
+has a Content Security Policy that disables network connections. It never
+uploads, imports, or executes the inspected source.
+
+GitHub Pages cannot run the Python AST backend, so the demo uses a documented
+lexical subset named MalIR-Lite. Uncertain cases are scored by µMal Nano: a
+one-layer, two-head, 3,538-parameter behavior Transformer embedded as a 73 KB
+ES module. Its bundled weights were trained from scratch on 32 synthetic smoke
+rows. That makes the model architecture real and reproducible, but its output
+is not a real-world efficacy claim. Use the Python CLI for AST-accurate results.
+See [the browser architecture and security boundary](docs/WEB_DEMO.md).
+
+Rebuild the embedded demo model with the optional CPU training environment:
+
+~~~bash
+.venv/bin/python scripts/train_web_model.py --epochs 500 --threads 2
+node --test web/tests/*.test.mjs
+~~~
+
 ## CLI
 
 ~~~text
+itcs PATH [--json] [--model FILE | --micro-model FILE]
 itcs scan PATH [--json] [--model FILE | --micro-model FILE]
 itcs extract PATH [--compact]
 itcs train-sparse DATASET -o MODEL
@@ -148,6 +181,7 @@ were taken on 2026-08-12.
 | Sparse smoke checkpoint | 7,259 bytes; 258 active weights |
 | Optional PyTorch training environment | 992 MB on disk; not needed by core/sparse |
 | Default µMal | 567,746 parameters; 2,280,321-byte FP32 checkpoint |
+| Browser µMal Nano | 3,538 parameters; 72,620-byte ES module |
 | µMal single-example inference, 2 threads | median 6.49 ms; p95 12.50 ms |
 
 The corpus benchmark uses repeated inert templates (95% ordinary and 5%
@@ -179,6 +213,7 @@ Motifs are bounded proximity evidence, not exact interprocedural data flow.
 - docs/RESEARCH.vi.md: bản nghiên cứu và roadmap tiếng Việt.
 - docs/EVALUATION_PROTOCOL.md: locked leakage/metrics/CPU study protocol.
 - docs/RESEARCH_DATA_FORMAT.md: manifest and prediction JSONL contracts.
+- docs/WEB_DEMO.md: browser architecture, model details, and security boundary.
 - CONTRIBUTING.md: safe contribution and research-claim rules.
 - src/malir/extractor.py: safe AST extraction and alias resolution.
 - src/malir/motifs.py: bounded behavior-path construction.
@@ -187,6 +222,8 @@ Motifs are bounded proximity evidence, not exact interprocedural data flow.
 - src/malir/microlm.py: tiny Transformer and training loop.
 - src/malir/manifest.py: metadata audit and representation leakage checks.
 - src/malir/evaluation.py: low-FPR, calibration, AURC, and group bootstrap.
+- web/: dependency-free GitHub Pages analyzer and embedded µMal Nano weights.
+- scripts/train_web_model.py: reproducible CPU trainer/exporter for µMal Nano.
 - docs/MALIR_SPEC.md: IR contract and versioning.
 - docs/RESEARCH.md: literature gap, experiments, and claim gates.
 - docs/THREAT_MODEL.md: security boundary and known evasions.
@@ -194,7 +231,7 @@ Motifs are bounded proximity evidence, not exact interprocedural data flow.
 
 ## Known limits
 
-Version 0.1 does not yet perform full data-flow or interprocedural analysis,
+Version 0.3 does not yet perform full data-flow or interprocedural analysis,
 unpack archives, inspect native extensions, deobfuscate arbitrary strings, or
 observe runtime-only behavior. It supports Python source only. See the research
 plan before extending the frontend to JavaScript, Go, or Rust.

@@ -1,7 +1,7 @@
 PYTHON := .venv/bin/python
 PIP := .venv/bin/pip
 
-.PHONY: bootstrap bootstrap-locked bootstrap-micro test lint benchmark
+.PHONY: bootstrap bootstrap-locked bootstrap-micro test test-web web web-model lint benchmark
 
 bootstrap:
 	python3 -m venv .venv
@@ -19,6 +19,15 @@ bootstrap-micro: bootstrap
 
 test:
 	$(PYTHON) -m pytest -q
+
+test-web:
+	node --test web/tests/*.test.mjs
+
+web:
+	python3 -m http.server 8000 --directory web
+
+web-model:
+	$(PYTHON) scripts/train_web_model.py --epochs 500 --threads 2
 
 lint:
 	.venv/bin/ruff format --check src scripts tests

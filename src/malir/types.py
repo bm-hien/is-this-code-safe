@@ -105,6 +105,12 @@ class ScanReport:
         return {
             "schema": "malir.scan.v1",
             "target": self.target,
+            "assessment": {
+                "low-signal": "no-malware-evidence",
+                "review": "needs-review",
+                "suspicious": "malware-like",
+                "high-risk": "malware-like",
+            }[self.verdict],
             "verdict": self.verdict,
             "risk_score": round(self.risk_score, 3),
             "rule_score": round(self.rule_score, 3),

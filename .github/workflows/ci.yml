@@ -23,3 +23,13 @@ jobs:
       - run: ruff check src scripts tests
       - run: itcs --version
       - run: pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: node --test web/tests/*.test.mjs

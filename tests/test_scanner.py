@@ -43,6 +43,17 @@ def test_cli_json_output(capsys):
     output = json.loads(capsys.readouterr().out)
     assert code == 0
     assert output["schema"] == "malir.scan.v1"
+    assert output["assessment"] == "no-malware-evidence"
+
+
+def test_cli_accepts_file_without_scan_subcommand(capsys):
+    target = FIXTURES / "suspicious" / "static_exfil.py"
+    code = main([str(target), "--json"])
+    output = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert output["assessment"] == "malware-like"
+    assert output["risk_score"] >= 50
+    assert output["evidence"]
 
 
 def test_parse_error_becomes_warning(tmp_path):
