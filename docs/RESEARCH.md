@@ -25,6 +25,7 @@ signatures, reputation, sandboxing, or an analyst.
 | [SCORE (2024)](https://arxiv.org/abs/2411.08182) | Uses syntax highlighting/AST structure with lightweight sequential and graph models | Structural representation may matter more than model scale | A security-specific, cross-language behavior contract |
 | [MalGuard (2025)](https://arxiv.org/abs/2506.14466) | Reports competitive RF/XGBoost results from 132 static features | Strong cheap baselines are mandatory | Temporal degradation and open-world generalization |
 | [MOLOT (2026)](https://arxiv.org/abs/2606.07792) | Interprocedural behavior sequences, BERT, and SHAP explanations | Representation and explanation can dominate latency | Remove full call-graph/SHAP cost from the common path |
+| [CodeQL Python data flow guide](https://codeql.github.com/docs/codeql-language-guides/analyzing-data-flow-in-python/) | Local flow is cheaper and more precise than global flow; local taint also follows non-value-preserving transforms | Start with bounded intraprocedural provenance | This is design guidance, not an ITCS efficacy result |
 | [MalTotal (2026)](https://arxiv.org/abs/2608.03232) | LLM-assisted sensitive-API discovery plus hybrid semantic slicing across five languages | Selective semantic reduction can sharply cut token cost | It still uses an LLM-assisted pipeline; results need independent replication |
 | [PyGuard (2026)](https://arxiv.org/abs/2601.16463) | Mines behavior patterns from false positives/negatives and uses LLM semantic abstraction | Hard negatives and contextual boundaries directly attack alert fatigue | Behavior mining and LLM reasoning are already occupied novelty |
 | [PYPILINE (2026)](https://arxiv.org/abs/2606.19063) | Builds AST/API graphs and suspicious-API knowledge for an agent workflow | Package-level API context is useful | Its LLM/RAG/agent path is not the two-CPU, offline target |
@@ -68,6 +69,35 @@ The repository implements these controls in `itcs audit-manifest` and
 `itcs evaluate-predictions`. Both operate on bounded metadata/prediction
 JSONL; neither opens or executes package content.
 
+### 2.2 Evidence update: provenance without whole-program cost
+
+Three observations motivate the version 0.4 flow design:
+
+1. The CodeQL Python guide distinguishes local from global data flow and notes
+   that local analysis is faster, more precise, and sufficient for many tasks.
+   Its local taint model also covers non-value-preserving steps such as string
+   composition, which matches malware-source transforms better than pure value
+   equality.
+2. MOLOT states that its intended data-flow augmentation made processing
+   prohibitively slow, so its released pipeline retained call-graph behavior
+   sequences instead. Its reported two-core call-graph and SHAP costs reinforce
+   that neither belongs in ITCS's common path.
+3. PyGuard's false-positive analysis reinforces that sensitive API occurrence
+   alone is insufficient; the surrounding behavioral context determines whether
+   an operation deserves an alert.
+
+ITCS therefore performs a second, bounded AST traversal only when a cheap
+per-callable event gate finds a supported source/sink candidate. It follows
+local names through assignments, expressions, transforms, comprehensions, and
+conservative control-flow joins. It does not build a call graph, compute SHAP,
+or cross function boundaries. Proven local paths receive `dataflow:high`;
+unproven same-function windows remain visible as low-weight `proximity:low`.
+Those labels are qualitative evidence tiers, not calibrated probabilities.
+
+Counterexample tests cover reassignment, unrelated constant payloads, URL-only
+provenance, branch joins, unknown local transforms, and callable boundaries.
+They validate implementation semantics, not detection accuracy on real malware.
+
 ## 3. Research hypothesis
 
 The candidate contribution is an evidence-carrying behavioral compiler plus a
@@ -99,9 +129,11 @@ Raw code lets a model learn package names, comments, formatting, and copied
 boilerplate. MalIR retains operations, lifecycle phase, target class, order,
 and evidence location. It deliberately discards most lexical content.
 
-The current extractor is a single AST pass plus a local window. This makes its
-cost predictable. A later bounded call-summary pass may improve recall without
-recreating a whole-program call graph.
+The current extractor first emits events, then uses a cheap per-callable gate
+to decide whether a bounded local provenance pass can produce a supported path.
+That pass is name-independent and flow-sensitive for local values, while the
+12-event window remains only a weak fallback. A later bounded call-summary pass
+may improve recall without recreating a whole-program call graph.
 
 ### 4.2 Two learned stages
 
@@ -125,8 +157,9 @@ enough to justify its conditional CPU cost.
 ### 4.3 Evidence instead of post-hoc SHAP
 
 Every IR event already contains a file, line, operation, and explanation.
-Behavior motifs retain the indexes of supporting events. This makes
-explanations available in the same pass as detection.
+Behavior motifs retain the indexes of supporting events and label their basis
+as data flow, proximity, or structure. This makes explanations available during
+detection and avoids presenting mere co-occurrence as a proven flow.
 
 This is cheaper than post-hoc perturbation, but faithfulness still needs to be
 tested. A rule explanation is faithful to that rule; it is not automatically an
@@ -142,8 +175,8 @@ explanation of µMal's probability.
   versus always-on inference?
 - RQ4: Which IR fields—phase, target, category, order, and motifs—drive
   generalization rather than dataset leakage?
-- RQ5: Are evidence paths useful and faithful enough for an analyst to verify
-  an alert quickly?
+- RQ5: Does bounded local provenance reduce false alerts versus proximity-only
+  motifs at acceptable CPU cost, and are its paths useful enough for review?
 - RQ6: Can a JavaScript frontend reuse the same vocabulary and pretrained
   behavior encoder with less labeled data?
 
@@ -209,9 +242,10 @@ Every experiment should include:
 | B6 | Gated rules + sparse + µMal |
 | B7 | Larger pretrained code model, offline upper bound only |
 
-Required ablations remove one item at a time: lifecycle phase, targets, event
-category, token order, motifs, masked-token loss, sparse stage, and uncertainty
-gate. Sweep vocabulary size, sequence length, model width, and gate thresholds.
+Required ablations remove one item at a time: local data flow, the data-flow
+candidate gate, proximity fallback, lifecycle phase, targets, event category,
+token order, motifs, masked-token loss, sparse stage, and uncertainty gate.
+Sweep vocabulary size, sequence length, model width, and gate thresholds.
 
 For robustness, generate semantics-preserving source variants: import aliases,
 identifier renaming, string concatenation, wrapper functions, independent call
@@ -262,18 +296,26 @@ PyTorch 2.13.0+cpu, Linux x86-64. Date: 2026-08-12.
 
 ### Static pipeline
 
-The benchmark creates 1,000 inert Python files in a temporary directory:
-95% ordinary templates and 5% suspicious-shaped templates. It warms once, then
-runs five scans while tracemalloc is active.
+The ablation creates 1,000 inert Python files in a temporary directory: 95%
+ordinary templates and 5% suspicious-shaped templates. Each mode warms once,
+then runs 21 scans while tracemalloc is active.
 
-- mean: 1,124.57 ms per 1,000-file tree;
-- median: 1,111.24 ms;
-- p95: 1,190.57 ms;
-- throughput: 889.23 files/second;
-- peak Python allocations: 2,725,883 bytes.
+| Mode | Mean | Median | p95 | Throughput | Peak Python allocation |
+|---|---:|---:|---:|---:|---:|
+| Candidate gate, data flow off | 1,170.64 ms | 1,159.24 ms | 1,272.15 ms | 854.23 files/s | 2,760,277 B |
+| Candidate gate, data flow on | 1,214.08 ms | 1,193.69 ms | 1,331.91 ms | 823.67 files/s | 2,782,985 B |
 
-tracemalloc excludes native allocations and adds overhead. A production
-benchmark must also record process RSS and cold filesystem behavior.
+On this synthetic mix, bounded flow adds 3.71% mean, 2.97% median, 4.70% p95,
+and 0.82% peak Python allocation. Before the candidate gate, a seven-repeat
+probe showed roughly 20% median overhead because every ordinary file paid for
+a second AST traversal. That exploratory probe motivated the optimization; the
+21-repeat gated result above is the recorded baseline.
+
+tracemalloc excludes native allocations and adds overhead. Sequential benchmark
+modes can still be affected by host noise. A production benchmark must also
+interleave modes, record process RSS, and cover cold filesystem behavior and
+real package-size distributions. These numbers measure cost, not detection
+quality.
 
 ### µMal pipeline
 
@@ -298,10 +340,12 @@ round-trip; it says nothing about generalization.
 
 ### Test state
 
-Forty-five automated tests currently pass. They cover extraction ordering,
-alias resolution, non-execution, syntax errors, deterministic tokens, symlinks
-and size limits, sparse learning/serialization, µMal training/loading, manifest
-leakage, low-FPR power, selective metrics, CLI JSON, and benchmark output.
+Sixty-nine automated tests currently pass: 63 Python tests and six browser
+engine tests. They cover extraction ordering, alias resolution, non-execution,
+syntax errors, deterministic tokens, symlinks and size limits, local-provenance
+counterexamples and gating, sparse learning/serialization, µMal training/loading,
+manifest leakage, low-FPR power, selective metrics, CLI JSON, browser evidence
+fidelity, and benchmark output.
 
 ## 10. Claim gates
 
@@ -323,7 +367,8 @@ until all corresponding gates pass.
 ### Phase A — Python research baseline
 
 - Metadata-only manifest audit and locked-prediction evaluation: implemented.
-- Add name-independent local value flow and bounded function summaries.
+- Name-independent bounded local value flow and candidate gate: implemented.
+- Add bounded function summaries without whole-program graph construction.
 - Build a safe manifest-to-MalIR dataset worker outside the Codespace.
 - Run OMCBench as a pilot, then a statistically powered hard-negative corpus.
 - Calibrate thresholds on validation only and freeze the manifest fingerprint.

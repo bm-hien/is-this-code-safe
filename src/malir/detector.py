@@ -88,6 +88,8 @@ def decide(
                     line=first.line,
                     op="BEHAVIOR_PATH",
                     motif=path.motif,
+                    evidence_kind=path.evidence_kind,
+                    confidence=path.confidence,
                 )
             )
 

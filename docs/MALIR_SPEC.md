@@ -17,7 +17,7 @@ Each analyzed file emits:
 | event_limit_reached | Whether additional behavior events were suppressed |
 | parse_error | Sanitized syntax/recursion error or null |
 | events | Ordered evidence-bearing behavior events |
-| behavior_paths | Bounded proximity motifs |
+| behavior_paths | Bounded data-flow, proximity, and structural motifs |
 | tokens | Deterministic model sequence |
 
 Oversized files are skipped by the scanner rather than partially parsed under
@@ -83,23 +83,44 @@ Future frontends should map equivalent lifecycle concepts to the same phases.
 
 ## Behavior paths
 
-Version 1 paths are local proximity motifs within one file and one function,
-using a maximum preceding window of 12 events. Supported motifs include:
+Each path carries `motif`, `score`, `reason`, `event_indexes`, `evidence_kind`,
+and `confidence`. Event indexes refer to the ordered file event list.
 
-| Motif | Static evidence |
+| Evidence kind | Meaning | Default tier |
+|---|---|---|
+| dataflow | Bounded local value provenance reaches a supported sink | high |
+| proximity | Source/transform and sink occur in a 12-event same-function window, but value flow is unproven | low |
+| structural | The event itself establishes the motif; no value flow is required | high |
+
+`confidence` is a qualitative analysis tier, not a probability, calibration
+result, or malware likelihood. Proximity paths deliberately receive much lower
+policy scores than data-flow paths.
+
+The data-flow pass is flow-sensitive for local names and handles assignments,
+container expressions, common transforms, comprehensions, loops, and
+conservative branch joins. Unknown local calls conservatively propagate their
+input provenance. It is bounded to 16 traces per value, 16 events per trace,
+and 256 emitted paths. A cheap per-callable event gate skips this second AST
+pass unless a supported source/sink pair can exist.
+
+Supported motifs include:
+
+| Motif | Data-flow or structural condition |
 |---|---|
-| credential_or_file_exfil | Sensitive source near outbound transfer |
-| fingerprinting_transfer | Host discovery near outbound transfer |
-| file_to_network | Generic file read near outbound transfer |
-| download_execute | Remote input near process or dynamic execution |
-| encoded_execution | Decode/deserialization near execution |
-| install_time_execution | Execution during an install phase |
-| persistence_write | Write to a common autostart location |
+| credential_or_file_exfil | Environment/sensitive-file value reaches outbound payload |
+| fingerprinting_transfer | Host-discovery value reaches outbound payload |
+| file_to_network | Generic file-read value reaches outbound payload |
+| download_execute | Network-received value reaches process or dynamic execution |
+| encoded_execution | Decode/deserialization result reaches execution |
+| install_time_execution | Execution occurs during an install phase |
+| persistence_write | Write targets a common autostart location |
 | destructive_file_action | File or directory deletion |
 
-These are not claims of exact data flow. Every motif stores event indexes so a
-reviewer can inspect its supporting operations. A future SSA/data-flow layer
-should use a distinct schema version or attach a confidence field.
+The analysis is intraprocedural: it does not prove flows through function
+returns, globals, object attributes, mutation, dynamic dispatch, or other
+modules. Every path keeps its supporting event indexes for review. Model tokens
+remain `MOTIF:<name>` regardless of evidence kind, so this additive metadata
+does not invalidate existing v1 sparse or µMal checkpoints.
 
 ## Risk and model separation
 

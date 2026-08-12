@@ -32,6 +32,8 @@ class BehaviorPath:
     score: float
     reason: str
     event_indexes: tuple[int, ...]
+    evidence_kind: str = "proximity"
+    confidence: str = "low"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -39,6 +41,8 @@ class BehaviorPath:
             "score": round(self.score, 3),
             "reason": self.reason,
             "event_indexes": list(self.event_indexes),
+            "evidence_kind": self.evidence_kind,
+            "confidence": self.confidence,
         }
 
 
@@ -81,6 +85,8 @@ class Evidence:
     line: int
     op: str
     motif: str | None = None
+    evidence_kind: str | None = None
+    confidence: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

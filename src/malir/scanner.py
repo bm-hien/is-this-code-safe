@@ -40,12 +40,16 @@ class Scanner:
         model: ProbabilityModel | None = None,
         limits: ScanLimits | None = None,
         cascade: CascadeConfig | None = None,
+        *,
+        enable_dataflow: bool = True,
     ) -> None:
         self.model = model
         self.limits = limits or ScanLimits()
         self.cascade = cascade or CascadeConfig()
+        self.enable_dataflow = enable_dataflow
         self.extractor = PythonExtractor(
-            ExtractorLimits(max_file_bytes=self.limits.max_file_bytes)
+            ExtractorLimits(max_file_bytes=self.limits.max_file_bytes),
+            enable_dataflow=enable_dataflow,
         )
 
     def scan(self, target: str | Path) -> ScanReport:

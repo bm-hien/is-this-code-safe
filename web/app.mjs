@@ -91,7 +91,12 @@ function makeEvidenceItem(item) {
   const body = document.createElement("div");
   body.className = "evidence-body";
   const operation = document.createElement("strong");
-  operation.textContent = item.motif ? `${item.op} · ${item.motif}` : item.op;
+  const provenance = item.evidenceKind
+    ? ` · ${item.evidenceKind}:${item.confidence}`
+    : "";
+  operation.textContent = item.motif
+    ? `${item.op} · ${item.motif}${provenance}`
+    : item.op;
   const reason = document.createElement("p");
   reason.textContent = item.reason;
   body.append(operation, reason);

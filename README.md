@@ -25,7 +25,7 @@ single opaque score is difficult to audit. ITCS instead uses this cascade:
 flowchart TD
     A["Python source"] --> B["Bounded AST parser"]
     B --> C["MalIR events"]
-    C --> D["Behavior motifs"]
+    C --> D["Candidate-gated local flow + motifs"]
     C --> E["7 KB sparse model"]
     D --> F["Evidence score"]
     E --> G["Uncertainty gate"]
@@ -43,8 +43,12 @@ compute, and a tiny domain language model trained from scratch.
 
 - Parses Python with ast; inspected files are never imported or executed.
 - Resolves common import aliases and emits source/transform/sink events.
-- Detects local proximity motifs such as credential-to-network,
-  download-to-execution, encoded execution, and install-time execution.
+- Tracks bounded, flow-sensitive local provenance through assignments,
+  containers, transforms, comprehensions, and conservative branch joins.
+- Distinguishes `dataflow:high`, `proximity:low`, and `structural:high`
+  evidence; the labels are qualitative analysis tiers, not probabilities.
+- Uses a cheap per-callable candidate gate, so the second AST pass runs only
+  when the extracted events can form a supported source-to-sink path.
 - Produces deterministic JSON with file hashes, line evidence, and warnings.
 - Includes a dependency-free hashed online logistic classifier.
 - Includes µMal: a 567,746-parameter Transformer with joint classification and
@@ -107,7 +111,9 @@ has a Content Security Policy that disables network connections. It never
 uploads, imports, or executes the inspected source.
 
 GitHub Pages cannot run the Python AST backend, so the demo uses a documented
-lexical subset named MalIR-Lite. Uncertain cases are scored by µMal Nano: a
+lexical subset named MalIR-Lite. Browser paths are explicitly labeled
+`proximity:low` and receive weak motif weight; only the CLI can emit
+`dataflow:high`. Uncertain cases are scored by µMal Nano: a
 one-layer, two-head, 3,538-parameter behavior Transformer embedded as a 73 KB
 ES module. Its bundled weights were trained from scratch on 32 synthetic smoke
 rows. That makes the model architecture real and reproducible, but its output
@@ -124,12 +130,12 @@ node --test web/tests/*.test.mjs
 ## CLI
 
 ~~~text
-itcs PATH [--json] [--model FILE | --micro-model FILE]
-itcs scan PATH [--json] [--model FILE | --micro-model FILE]
-itcs extract PATH [--compact]
+itcs PATH [--json] [--no-dataflow] [--model FILE | --micro-model FILE]
+itcs scan PATH [--json] [--no-dataflow] [--model FILE | --micro-model FILE]
+itcs extract PATH [--compact] [--no-dataflow]
 itcs train-sparse DATASET -o MODEL
 itcs train-micro DATASET -o CHECKPOINT
-itcs benchmark PATH [--repeats N]
+itcs benchmark PATH [--repeats N] [--no-dataflow | --compare-dataflow]
 itcs audit-manifest MANIFEST [--strict] [--json]
 itcs evaluate-predictions PREDICTIONS [--target-fpr RATE] [--json]
 ~~~
@@ -175,9 +181,11 @@ were taken on 2026-08-12.
 
 | Component | Result |
 |---|---:|
-| Static AST + MalIR, 1,000 inert files | 889.23 files/s |
-| Static scan latency, 1,000 files | median 1,111.24 ms; p95 1,190.57 ms |
-| Python allocations during static benchmark | 2,725,883 bytes peak via tracemalloc |
+| Candidate-gated local flow, 1,000 inert files | 823.67 files/s |
+| Local-flow scan latency, 1,000 files | median 1,193.69 ms; p95 1,331.91 ms |
+| Data-flow-off ablation | median 1,159.24 ms; p95 1,272.15 ms |
+| Local-flow overhead on the 95/5 synthetic mix | median +2.97%; p95 +4.70% |
+| Python allocations with local flow | 2,782,985 bytes peak; +0.82% |
 | Sparse smoke checkpoint | 7,259 bytes; 258 active weights |
 | Optional PyTorch training environment | 992 MB on disk; not needed by core/sparse |
 | Default µMal | 567,746 parameters; 2,280,321-byte FP32 checkpoint |
@@ -190,7 +198,8 @@ Export predictions on a project-disjoint, time-split real dataset, audit the
 manifest, and use `itcs evaluate-predictions` before making efficacy claims.
 
 ~~~bash
-.venv/bin/python scripts/benchmark_corpus.py --files 1000 --repeats 5
+.venv/bin/python scripts/benchmark_corpus.py --files 1000 \
+  --repeats 21 --compare-dataflow
 .venv/bin/python scripts/benchmark_micro.py artifacts/micro.pt --repeats 300
 # Checkpoint plumbing smoke test only; never use this line for efficacy claims.
 .venv/bin/python scripts/evaluate.py examples/synthetic_train.jsonl \
@@ -206,7 +215,10 @@ manifest, and use `itcs evaluate-predictions` before making efficacy claims.
   attribution.
 
 Each result retains the operations and source locations that created the score.
-Motifs are bounded proximity evidence, not exact interprocedural data flow.
+`dataflow:high` means the bounded intraprocedural pass carried a value from a
+supported source to the displayed sink. `proximity:low` is only a same-function
+window fallback; `structural:high` needs no value flow. These categorical tiers
+are not calibrated probabilities and none is whole-program proof.
 
 ## Repository map
 
@@ -215,8 +227,10 @@ Motifs are bounded proximity evidence, not exact interprocedural data flow.
 - docs/RESEARCH_DATA_FORMAT.md: manifest and prediction JSONL contracts.
 - docs/WEB_DEMO.md: browser architecture, model details, and security boundary.
 - CONTRIBUTING.md: safe contribution and research-claim rules.
-- src/malir/extractor.py: safe AST extraction and alias resolution.
-- src/malir/motifs.py: bounded behavior-path construction.
+- src/malir/extractor.py: safe AST extraction, alias resolution, and the
+  per-callable data-flow candidate gate.
+- src/malir/flow.py: bounded, name-independent local value provenance.
+- src/malir/motifs.py: data-flow, proximity, and structural path policy.
 - src/malir/detector.py: evidence weights and uncertainty gate.
 - src/malir/model.py: dependency-free online sparse classifier.
 - src/malir/microlm.py: tiny Transformer and training loop.
@@ -231,10 +245,12 @@ Motifs are bounded proximity evidence, not exact interprocedural data flow.
 
 ## Known limits
 
-Version 0.3 does not yet perform full data-flow or interprocedural analysis,
-unpack archives, inspect native extensions, deobfuscate arbitrary strings, or
-observe runtime-only behavior. It supports Python source only. See the research
-plan before extending the frontend to JavaScript, Go, or Rust.
+Version 0.4 performs bounded intraprocedural value provenance, not full
+interprocedural or whole-program data-flow analysis. It does not yet summarize
+function calls, track object attributes or mutation precisely, unpack archives,
+inspect native extensions, deobfuscate arbitrary strings, or observe
+runtime-only behavior. It supports Python source only. See the research plan
+before extending the frontend to JavaScript, Go, or Rust.
 
 ## Safe contribution rule
 

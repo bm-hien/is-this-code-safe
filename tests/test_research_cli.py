@@ -6,6 +6,23 @@ from malir.cli import main
 EXAMPLES = Path(__file__).parents[1] / "examples"
 
 
+def test_benchmark_rejects_conflicting_dataflow_modes(capsys):
+    try:
+        main(
+            [
+                "benchmark",
+                str(EXAMPLES),
+                "--no-dataflow",
+                "--compare-dataflow",
+            ]
+        )
+    except SystemExit as error:
+        assert error.code == 2
+    else:
+        raise AssertionError("conflicting modes should be rejected")
+    assert "not allowed with argument" in capsys.readouterr().err
+
+
 def test_audit_manifest_cli_json(capsys):
     code = main(
         [

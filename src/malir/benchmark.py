@@ -12,6 +12,45 @@ from pathlib import Path
 from .scanner import Scanner
 
 
+def benchmark_dataflow_ablation(
+    target: str | Path,
+    repeats: int = 20,
+) -> dict:
+    baseline = benchmark_scan(
+        target,
+        repeats=repeats,
+        scanner=Scanner(enable_dataflow=False),
+    )
+    dataflow = benchmark_scan(
+        target,
+        repeats=repeats,
+        scanner=Scanner(enable_dataflow=True),
+    )
+    baseline_median = baseline["median_ms"]
+    baseline_peak = baseline["tracemalloc_peak_bytes"]
+    return {
+        "schema": "malir.dataflow-ablation.v1",
+        "baseline": baseline,
+        "dataflow": dataflow,
+        "mean_overhead_percent": round(
+            100.0 * (dataflow["mean_ms"] / baseline["mean_ms"] - 1.0),
+            3,
+        ),
+        "median_overhead_percent": round(
+            100.0 * (dataflow["median_ms"] / baseline_median - 1.0),
+            3,
+        ),
+        "p95_overhead_percent": round(
+            100.0 * (dataflow["p95_ms"] / baseline["p95_ms"] - 1.0),
+            3,
+        ),
+        "peak_allocation_overhead_percent": round(
+            100.0 * (dataflow["tracemalloc_peak_bytes"] / baseline_peak - 1.0),
+            3,
+        ),
+    }
+
+
 def benchmark_scan(
     target: str | Path,
     repeats: int = 20,
@@ -40,6 +79,7 @@ def benchmark_scan(
         "python": platform.python_version(),
         "platform": platform.platform(),
         "repeats": repeats,
+        "dataflow_enabled": scanner.enable_dataflow,
         "files_per_run": files,
         "mean_ms": round(mean_ms, 4),
         "median_ms": round(statistics.median(timings), 4),

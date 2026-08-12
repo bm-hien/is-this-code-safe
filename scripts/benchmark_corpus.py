@@ -8,7 +8,8 @@ import json
 import tempfile
 from pathlib import Path
 
-from malir.benchmark import benchmark_scan
+from malir.benchmark import benchmark_dataflow_ablation, benchmark_scan
+from malir.scanner import Scanner
 
 SAFE_SOURCE = """\
 import json
@@ -35,6 +36,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--files", type=int, default=1_000)
     parser.add_argument("--repeats", type=int, default=5)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--no-dataflow", action="store_true")
+    mode.add_argument("--compare-dataflow", action="store_true")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="malir-bench-") as directory:
         root = Path(directory)
@@ -44,7 +48,14 @@ def main() -> int:
                 source,
                 encoding="utf-8",
             )
-        output = benchmark_scan(root, repeats=args.repeats)
+        if args.compare_dataflow:
+            output = benchmark_dataflow_ablation(root, repeats=args.repeats)
+        else:
+            output = benchmark_scan(
+                root,
+                repeats=args.repeats,
+                scanner=Scanner(enable_dataflow=not args.no_dataflow),
+            )
     print(json.dumps(output, indent=2, sort_keys=True))
     return 0
 

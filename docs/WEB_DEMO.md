@@ -28,13 +28,17 @@ uses a bounded lexical frontend that:
 2. extracts string values separately for sensitive and persistence paths;
 3. resolves common `import`, `from ... import`, and assignment aliases;
 4. emits the same operation names used by MalIR;
-5. builds conservative, same-function proximity motifs; and
+5. builds conservative, same-function proximity motifs labeled
+   `proximity:low` and gives them only weak rule weight; and
 6. preserves line locations for every weighted signal.
 
 MalIR-Lite intentionally does not claim full Python parsing. In particular,
 multi-line calls, unusual aliasing, generated code, advanced f-strings, and
-dynamic dispatch can evade or confuse it. The installed CLI remains the
-reference frontend because it uses Python's bounded `ast` parser.
+dynamic dispatch can evade or confuse it. It never labels a browser path as
+proved data flow. The installed CLI remains the reference frontend because it
+uses Python's bounded `ast` parser plus candidate-gated local value provenance.
+Its `dataflow:high` and the browser's `proximity:low` labels are qualitative
+evidence tiers, not calibrated probabilities.
 
 ## µMal Nano
 

@@ -32,7 +32,8 @@ với signature, sandbox hoặc analyst; không nên tự nhận là antivirus h
 | Cerebro | Behavior sequence + BERT/RoBERTa | Giảm model và chi phí biểu diễn |
 | SCORE | AST/structure + mô hình nhẹ | Chuẩn hóa IR chuyên cho hành vi malware |
 | MalGuard | 132 feature + RF/XGBoost mạnh | Thêm thứ tự hành vi và evidence |
-| MOLOT | Call graph + BERT + SHAP | Loại full call graph/SHAP khỏi common path |
+| MOLOT | Call graph + BERT + SHAP; bỏ data flow vì xử lý quá chậm | Loại full call graph/SHAP khỏi common path |
+| CodeQL local data flow | Local flow rẻ và chính xác hơn global flow cho nhiều query | Bắt đầu bằng provenance nội hàm có giới hạn |
 | MalTotal | Semantic slicing có LLM hỗ trợ | Pipeline local không phụ thuộc LLM lớn |
 | PyGuard | Mining behavior từ false positive/negative + LLM abstraction | Hard negative và ranh giới ngữ cảnh, nhưng novelty này đã có |
 | PYPILINE | AST/API graph + knowledge base + agent/RAG | Học API context, nhưng không hợp mục tiêu offline 2 CPU |
@@ -67,6 +68,13 @@ với signature, sandbox hoặc analyst; không nên tự nhận là antivirus h
 Repo hiện có `itcs audit-manifest` và `itcs evaluate-predictions` để biến ba
 điều trên thành kiểm tra tự động, không đụng vào nội dung malware.
 
+Một kết luận kỹ thuật khác đến từ đối chiếu CodeQL, MOLOT và PyGuard: local
+value flow đủ rẻ và chính xác hơn proximity/global flow cho nhiều bài toán,
+trong khi full call graph, data flow toàn cục và SHAP không hợp common path 2
+CPU. Vì vậy bản 0.4 chỉ chạy pass provenance thứ hai khi event gate tìm thấy
+cặp source/sink có thể tạo path. Thiết kế này không dựng call graph và không
+đi qua ranh giới function.
+
 ## Những gì đã triển khai
 
 ### Frontend Python an toàn
@@ -87,17 +95,27 @@ Operation độc lập ngôn ngữ gồm ENV_READ, SENSITIVE_FILE_READ, NETWORK_
 NETWORK_RECEIVE, ENCODE, DECODE, PROCESS_EXEC, DYNAMIC_EXEC,
 UNSAFE_DESERIALIZE, PERSISTENCE_WRITE và các context khác.
 
-Motif hiện là proximity path trong cùng function, ví dụ:
+Behavior path có ba loại bằng chứng:
 
-- credential_or_file_exfil;
-- download_execute;
-- encoded_execution;
-- install_time_execution;
-- persistence_write;
-- destructive_file_action.
+- `dataflow:high`: pass nội hàm đã mang provenance của value từ source được
+  hỗ trợ tới payload/command của sink;
+- `proximity:low`: source/transform chỉ xuất hiện gần sink trong cùng function,
+  chưa chứng minh value flow và chỉ nhận trọng số nhỏ;
+- `structural:high`: chính event đã đủ tạo motif, không cần value flow.
 
-Motif chưa phải data flow chính xác. Event index được giữ lại để analyst tự
-kiểm chứng.
+`high/low` là mức bằng chứng định tính, không phải xác suất hay malware
+likelihood. Pass local flow theo assignment, biểu thức/container, transform,
+comprehension, loop và branch join bảo thủ. Nó bị chặn ở 16 trace mỗi value,
+16 event mỗi trace và 256 path; event gate bỏ qua toàn bộ pass khi không có
+cặp source/sink phù hợp.
+
+Motif gồm credential/file exfiltration, fingerprint transfer, file-to-network,
+download-execute, encoded execution, install-time execution, persistence và
+destructive file action. Mỗi path giữ event index để analyst kiểm chứng.
+
+Giới hạn quan trọng: đây chưa phải interprocedural/whole-program flow. Function
+return, global, object attribute, mutation và dynamic dispatch chưa được theo
+dõi chính xác.
 
 ### Hai mô hình
 
@@ -137,17 +155,21 @@ Máy: 2 vCPU, khoảng 8 GB RAM, Python 3.12.1, Linux x86-64.
 
 | Đo lường | Kết quả |
 |---|---:|
-| Quét 1.000 file tổng hợp trơ | 889,23 file/giây |
-| Latency tree 1.000 file | median 1.111,24 ms; p95 1.190,57 ms |
-| Python allocation peak | 2.725.883 byte qua tracemalloc |
+| Candidate gate, tắt local flow | median 1.159,24 ms; p95 1.272,15 ms; 854,23 file/s |
+| Candidate gate, bật local flow | median 1.193,69 ms; p95 1.331,91 ms; 823,67 file/s |
+| Overhead local flow trên corpus 95/5 | median +2,97%; mean +3,71%; p95 +4,70% |
+| Python allocation peak | 2.782.985 byte; +0,82% so với tắt flow |
 | Sparse checkpoint | 7.259 byte |
 | µMal FP32 checkpoint | 2.280.321 byte |
 | µMal inference, 2 thread | median 6,49 ms; p95 12,50 ms |
-| Test | 45 test pass |
+| Test | 63 Python + 6 browser test pass |
 | Môi trường train PyTorch | 992 MB; không cần cho core/sparse |
 
-Corpus benchmark là template trơ với 95% mẫu thông thường và 5% source có hình
-dạng đáng ngờ. Dataset train có 32 dòng tổng hợp và được dùng lại để smoke
+Mỗi mode được warm-up rồi đo 21 lượt với tracemalloc. Một probe bảy lượt trước
+khi có candidate gate từng cho median overhead khoảng 20%; kết quả đó dẫn tới
+tối ưu chỉ chạy pass hai trên file có candidate. Corpus benchmark là template
+trơ với 95% mẫu thông thường và 5% source có hình dạng đáng ngờ. Dataset train
+có 32 dòng tổng hợp và được dùng lại để smoke
 evaluation. Vì vậy 100% training score chỉ chứng minh model học/chạy/save/load
 được; tuyệt đối không phải số liệu detection thực tế.
 
@@ -220,9 +242,9 @@ Nếu chưa đạt các cổng này, mô tả đúng là “prototype nghiên c�
 ## Việc nên làm tiếp theo
 
 1. Viết worker ingest OMCBench an toàn bên ngoài Codespace.
-2. Thêm bounded local value-flow và function summaries cho Python.
-3. Dùng OMCBench làm pilot, rồi tạo hard-negative corpus ít nhất đủ lực cho FPR.
-4. Chạy baseline/ablation, audit manifest và khóa prediction trước khi tính metric.
+2. Dùng OMCBench làm pilot cho ablation proximity-only so với local flow.
+3. Thêm bounded function summaries nhưng không dựng whole-program call graph.
+4. Tạo hard-negative corpus đủ lực cho FPR, audit manifest và khóa prediction.
 5. Calibrate gate trên validation; đo AURC và reject-rate drift thật.
 6. Chỉ sau đó mới thử INT8 và frontend JavaScript.
 

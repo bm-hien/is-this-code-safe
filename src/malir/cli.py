@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .benchmark import benchmark_scan
+from .benchmark import benchmark_dataflow_ablation, benchmark_scan
 from .data import load_examples
 from .evaluation import evaluation_report, load_predictions
 from .manifest import audit_manifest_path
@@ -58,6 +58,11 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--max-files", type=int, default=10_000)
     scan.add_argument("--max-file-bytes", type=int, default=1_000_000)
     scan.add_argument(
+        "--no-dataflow",
+        action="store_true",
+        help="disable local provenance analysis for cost/quality ablations",
+    )
+    scan.add_argument(
         "--fail-on",
         choices=EXIT_THRESHOLDS,
         default="never",
@@ -67,6 +72,7 @@ def build_parser() -> argparse.ArgumentParser:
     extract = commands.add_parser("extract", help="print MalIR as JSON")
     extract.add_argument("path")
     extract.add_argument("--compact", action="store_true")
+    extract.add_argument("--no-dataflow", action="store_true")
 
     sparse = commands.add_parser(
         "train-sparse",
@@ -100,6 +106,13 @@ def build_parser() -> argparse.ArgumentParser:
     bench.add_argument("path")
     bench.add_argument("--repeats", type=int, default=20)
     bench.add_argument("--json", action="store_true", dest="as_json")
+    dataflow_mode = bench.add_mutually_exclusive_group()
+    dataflow_mode.add_argument("--no-dataflow", action="store_true")
+    dataflow_mode.add_argument(
+        "--compare-dataflow",
+        action="store_true",
+        help="measure provenance overhead against the proximity-only baseline",
+    )
 
     audit = commands.add_parser(
         "audit-manifest",
@@ -212,7 +225,11 @@ def _scanner_from_args(args: argparse.Namespace) -> Scanner:
         max_files=args.max_files,
         max_file_bytes=args.max_file_bytes,
     )
-    return Scanner(model=model, limits=limits)
+    return Scanner(
+        model=model,
+        limits=limits,
+        enable_dataflow=not args.no_dataflow,
+    )
 
 
 def _scan(args: argparse.Namespace) -> int:
@@ -226,7 +243,7 @@ def _scan(args: argparse.Namespace) -> int:
 
 
 def _extract(args: argparse.Namespace) -> int:
-    report = Scanner().scan(args.path)
+    report = Scanner(enable_dataflow=not args.no_dataflow).scan(args.path)
     payload = {
         "schema": "malir.ir.v1",
         "target": report.target,
@@ -297,12 +314,31 @@ def _train_micro(args: argparse.Namespace) -> int:
 
 
 def _benchmark(args: argparse.Namespace) -> int:
-    result = benchmark_scan(args.path, repeats=args.repeats)
+    if args.compare_dataflow:
+        result = benchmark_dataflow_ablation(args.path, repeats=args.repeats)
+    else:
+        result = benchmark_scan(
+            args.path,
+            repeats=args.repeats,
+            scanner=Scanner(enable_dataflow=not args.no_dataflow),
+        )
     if args.as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
-    else:
+    elif args.compare_dataflow:
+        baseline = result["baseline"]
+        dataflow = result["dataflow"]
         print(
-            f"{result['files_per_run']} files | "
+            f"{baseline['files_per_run']} files | "
+            f"median {baseline['median_ms']:.2f} → "
+            f"{dataflow['median_ms']:.2f} ms | "
+            f"median overhead {result['median_overhead_percent']:.1f}% | "
+            f"p95 overhead {result['p95_overhead_percent']:.1f}% | "
+            f"peak allocations {result['peak_allocation_overhead_percent']:.1f}%"
+        )
+    else:
+        dataflow = "dataflow on" if result["dataflow_enabled"] else "dataflow off"
+        print(
+            f"{result['files_per_run']} files | {dataflow} | "
             f"median {result['median_ms']:.2f} ms | "
             f"p95 {result['p95_ms']:.2f} ms | "
             f"{result['files_per_second'] or 0:.1f} files/s | "
@@ -325,8 +361,13 @@ def _print_report(report) -> None:
     print(f"rule score {report.rule_score:.1f} | model {model_state}")
     for item in report.evidence:
         motif = f" [{item.motif}]" if item.motif else ""
+        provenance = (
+            f" {item.evidence_kind}:{item.confidence}"
+            if item.evidence_kind and item.confidence is not None
+            else ""
+        )
         print(
-            f"- {item.path}:{item.line} {item.op}{motif} "
+            f"- {item.path}:{item.line} {item.op}{motif}{provenance} "
             f"+{item.score:.0f}: {item.reason}"
         )
     for warning in report.warnings:

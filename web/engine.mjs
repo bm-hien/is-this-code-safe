@@ -562,11 +562,25 @@ function buildMotifs(events, windowSize = 12) {
   const motifs = [];
   const seen = new Set();
 
-  const append = (motif, score, reason, indexes) => {
+  const append = (
+    motif,
+    score,
+    reason,
+    indexes,
+    evidenceKind = "proximity",
+    confidence = "low",
+  ) => {
     const key = `${motif}:${indexes.join(",")}`;
     if (seen.has(key)) return;
     seen.add(key);
-    motifs.push({ motif, score, reason, eventIndexes: indexes });
+    motifs.push({
+      motif,
+      score,
+      reason,
+      eventIndexes: indexes,
+      evidenceKind,
+      confidence,
+    });
   };
 
   for (const group of groups.values()) {
@@ -582,22 +596,22 @@ function buildMotifs(events, windowSize = 12) {
           if (["ENV_READ", "SENSITIVE_FILE_READ"].includes(source.event.op)) {
             append(
               "credential_or_file_exfil",
-              36,
-              "sensitive source appears near an outbound transfer",
+              2,
+              "sensitive source appears near an outbound transfer; browser value flow was not proven",
               [source.index, sinkIndex],
             );
           } else if (source.event.op === "SYSTEM_DISCOVERY") {
             append(
               "fingerprinting_transfer",
-              24,
-              "host discovery appears near an outbound transfer",
+              2,
+              "host discovery appears near an outbound transfer; browser value flow was not proven",
               [source.index, sinkIndex],
             );
           } else if (source.event.op === "FILE_READ") {
             append(
               "file_to_network",
-              14,
-              "file read appears near an outbound transfer",
+              1,
+              "file read appears near an outbound transfer; browser value flow was not proven",
               [source.index, sinkIndex],
             );
           }
@@ -611,16 +625,16 @@ function buildMotifs(events, windowSize = 12) {
         if (remote.length) {
           append(
             "download_execute",
-            42,
-            "remote input appears near code or process execution",
+            4,
+            "remote input appears near execution; browser value flow was not proven",
             [remote.at(-1).index, sinkIndex],
           );
         }
         if (transforms.length) {
           append(
             "encoded_execution",
-            40,
-            "decoded or deserialized data appears near execution",
+            6,
+            "decoded or deserialized data appears near execution; browser value flow was not proven",
             [transforms.at(-1).index, sinkIndex],
           );
         }
@@ -630,6 +644,8 @@ function buildMotifs(events, windowSize = 12) {
             30,
             "execution occurs during package installation",
             [sinkIndex],
+            "structural",
+            "high",
           );
         }
       }
@@ -640,6 +656,8 @@ function buildMotifs(events, windowSize = 12) {
           34,
           "code writes to a common autostart location",
           [sinkIndex],
+          "structural",
+          "high",
         );
       }
       if (sink.op === "FILE_DELETE") {
@@ -648,6 +666,8 @@ function buildMotifs(events, windowSize = 12) {
           18,
           "code deletes a file or directory",
           [sinkIndex],
+          "structural",
+          "high",
         );
       }
     });
@@ -842,6 +862,8 @@ export function analyzeSource(source, fileName = "sample.py") {
       line: first?.line || 0,
       op: "BEHAVIOR_PATH",
       motif: motif.motif,
+      evidenceKind: motif.evidenceKind,
+      confidence: motif.confidence,
     });
   }
   evidence.sort(

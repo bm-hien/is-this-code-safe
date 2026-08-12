@@ -4,7 +4,7 @@ title: "Is this code safe? - ITCS"
 type: software
 authors:
   - name: "ITCS contributors"
-version: 0.3.0
+version: 0.4.0
 date-released: 2026-08-12
 repository-code: "https://github.com/bm-hien/is-this-code-safe"
 url: "https://github.com/bm-hien/is-this-code-safe"

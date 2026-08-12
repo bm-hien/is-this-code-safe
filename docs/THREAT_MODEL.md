@@ -18,11 +18,17 @@ must not trust:
 - model checkpoints from unknown parties;
 - archive metadata or symlinks.
 
-## Safety invariants in version 0.2
+## Safety invariants in version 0.4
 
 - Source is opened as bytes, bounded, decoded with replacement, and passed to
   ast.parse.
 - No inspected module is imported, compiled to bytecode, installed, or run.
+- Local provenance is a second traversal of the already parsed AST; it performs
+  no evaluation and is bounded by traces per value, trace length, and path count.
+- A per-callable event gate skips provenance traversal when no supported
+  source/sink combination exists.
+- A provenance recursion/value error is reported and falls back to weak
+  proximity evidence instead of aborting the whole scan.
 - Files over the configured limit are skipped.
 - Symlinked Python files are skipped and directory traversal does not follow
   symlinks.
@@ -53,8 +59,9 @@ tokens and network access may still be reachable.
 ## Denial-of-service considerations
 
 Python's parser still consumes CPU and memory on attacker-controlled syntax.
-Current controls bound bytes per file, total bytes, file count, and emitted
-events. Future archive support must additionally bound nesting depth,
+Current controls bound bytes per file, total bytes, file count, emitted
+events, provenance traces per value, trace length, and behavior-path count.
+Future archive support must additionally bound nesting depth,
 compression ratio, extracted bytes, duplicate paths, and wall-clock time.
 
 The current scanner is single-process. A production service should run parsing
@@ -69,7 +76,8 @@ Static syntax analysis can miss:
 - encrypted or remotely retrieved payloads;
 - native code and unsafe build backends;
 - runtime-generated import names, URLs, and paths;
-- semantic flows split across many functions or packages;
+- semantic flows split across functions, globals, object attributes, mutation,
+  dynamic dispatch, or packages;
 - environment-triggered branches and logic bombs;
 - adversarial dead code designed to create false positives;
 - equivalent APIs absent from the policy vocabulary.

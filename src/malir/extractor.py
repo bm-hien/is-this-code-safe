@@ -10,9 +10,19 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from .flow import build_local_dataflow_paths
 from .motifs import build_behavior_paths
 from .policy import classify_call, is_persistence_path, is_sensitive_path
 from .types import Event, FileAnalysis
+
+_DATAFLOW_SEND_SOURCES = {
+    "ENV_READ",
+    "SENSITIVE_FILE_READ",
+    "FILE_READ",
+    "SYSTEM_DISCOVERY",
+}
+_DATAFLOW_EXEC_SOURCES = {"NETWORK_RECEIVE", "DECODE", "UNSAFE_DESERIALIZE"}
+_DATAFLOW_EXEC_SINKS = {"DYNAMIC_EXEC", "PROCESS_EXEC"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,8 +32,14 @@ class ExtractorLimits:
 
 
 class PythonExtractor:
-    def __init__(self, limits: ExtractorLimits | None = None) -> None:
+    def __init__(
+        self,
+        limits: ExtractorLimits | None = None,
+        *,
+        enable_dataflow: bool = True,
+    ) -> None:
         self.limits = limits or ExtractorLimits()
+        self.enable_dataflow = enable_dataflow
 
     def analyze_file(
         self, path: str | Path, display_path: str | None = None
@@ -53,7 +69,23 @@ class PythonExtractor:
             return result
         result.events = visitor.events
         result.event_limit_reached = visitor.event_limit_reached
-        result.behavior_paths = build_behavior_paths(result.events)
+        dataflow_paths = []
+        if self.enable_dataflow and _has_dataflow_candidate(visitor.events):
+            try:
+                dataflow_paths = build_local_dataflow_paths(
+                    tree,
+                    visitor.events,
+                    visitor.node_events,
+                    visitor.call_names,
+                )
+            except (RecursionError, ValueError) as error:
+                result.parse_error = (
+                    f"local provenance analysis stopped: {_format_parse_error(error)}"
+                )
+        result.behavior_paths = build_behavior_paths(
+            result.events,
+            dataflow_paths=dataflow_paths,
+        )
         return result
 
 
@@ -65,6 +97,8 @@ class _BehaviorVisitor(ast.NodeVisitor):
         self.event_limit_reached = False
         self.aliases: dict[str, str] = {}
         self.function_stack: list[str] = []
+        self.node_events: dict[int, list[int]] = {}
+        self.call_names: dict[int, str] = {}
 
     @property
     def function(self) -> str:
@@ -91,6 +125,7 @@ class _BehaviorVisitor(ast.NodeVisitor):
         if len(self.events) >= self.max_events:
             self.event_limit_reached = True
             return
+        event_index = len(self.events)
         self.events.append(
             Event(
                 op=op,
@@ -104,6 +139,7 @@ class _BehaviorVisitor(ast.NodeVisitor):
                 detail=detail,
             )
         )
+        self.node_events.setdefault(id(node), []).append(event_index)
 
     def visit_Import(self, node: ast.Import) -> None:
         for item in node.names:
@@ -157,6 +193,7 @@ class _BehaviorVisitor(ast.NodeVisitor):
         for child in ast.iter_child_nodes(node):
             self.visit(child)
         name = self._qualified_name(node.func) or "unknown"
+        self.call_names[id(node)] = name
         if name in {"open", "builtins.open", "io.open"}:
             self._handle_open(node, name)
             return
@@ -259,6 +296,19 @@ class _BehaviorVisitor(ast.NodeVisitor):
             if left is not None and right is not None:
                 return (left + right)[:240]
         return None
+
+
+def _has_dataflow_candidate(events: list[Event]) -> bool:
+    """Cheap gate for the bounded second AST pass, scoped per callable."""
+    operations_by_function: dict[str, set[str]] = {}
+    for event in events:
+        operations_by_function.setdefault(event.function, set()).add(event.op)
+    for operations in operations_by_function.values():
+        if "NETWORK_SEND" in operations and operations & _DATAFLOW_SEND_SOURCES:
+            return True
+        if operations & _DATAFLOW_EXEC_SINKS and operations & _DATAFLOW_EXEC_SOURCES:
+            return True
+    return False
 
 
 def _format_parse_error(error: Exception) -> str:
