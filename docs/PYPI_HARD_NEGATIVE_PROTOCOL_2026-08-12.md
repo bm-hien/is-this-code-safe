@@ -1,10 +1,13 @@
 # PyPI hard-negative study protocol (2026-08-12)
 
-Study ID: `itcs-pypi-hard-negative-2026-08-12-v1`
+Base study ID: `itcs-pypi-hard-negative-2026-08-12-v1`
 
-Status: preregistered before acquiring artifacts or computing any score in
-the new corpus. This document may receive typo-only corrections after the
-protocol commit; substantive deviations must be listed in the final report.
+Active study ID: `itcs-pypi-hard-negative-2026-08-12-v2`
+
+Status: V1 terminated at its metadata leakage audit before any detector score.
+The V2 amendment in section 13 is preregistered before materializing the V2
+split or computing any corpus score. Candidate scoring and claim gates remain
+unchanged.
 
 ## 1. Research question and primary gate
 
@@ -118,7 +121,7 @@ canonical group rank is the minimum popularity rank among members. The first
 are reserve-only and must not replace a scored holdout failure.
 
 Groups are assigned using SHA-256 of
-`itcs-pypi-hard-negative-2026-08-12-v1|group_id`. Sort by that value; even
+`<active-study-id>|group_id`. Sort by that value; even
 positions become development and odd positions become holdout until each has
 450 groups. The split manifest and its SHA-256 are frozen before scoring.
 
@@ -235,3 +238,40 @@ sizes, yanked state, and project metadata; OSV defines the batch advisory API.
 
 These references motivate the hypothesis but do not determine outcomes. The
 exact URLs and access dates are recorded in the final report.
+## 13. V1 termination and preregistered V2 leakage closure
+
+V1 terminated during the metadata-only cross-corpus audit, before the first
+detector score and before any output was written to its development directory.
+The frozen V1 PyPI holdout contained two exact Python source sets already in
+the previously published OMCBench validation split:
+
+- `antlr4-python3-runtime` 4.13.2;
+- `opt-einsum` 3.4.0.
+
+Both OMCBench rows are labeled benign. Their archive SHA-256 values differ
+because V1 selected source distributions while OMCBench contains wheels, but
+their bounded Python source-set and normalized-AST hashes match exactly. V1 is
+therefore recorded as `terminated-pre-score-leakage`; it has no detector
+result and its split is never repaired or reused for a claim.
+
+V2 changes only the following preprocessing rule and the study identifier:
+
+1. use study ID `itcs-pypi-hard-negative-2026-08-12-v2`;
+2. before selecting the 900 PyPI groups, exclude every entire PyPI group whose
+   archive, source-set, or normalized-AST hash overlaps **any** of the 400
+   previously exposed OMCBench rows, including both validation and test;
+3. select the first 900 remaining groups by the frozen
+   `(canonical_rank, group_id)` order;
+4. assign 450/450 using SHA-256 of the V2 study ID and group ID;
+5. record the excluded group IDs and overlap fields in the V2 preparation
+   metadata and bind them to the unchanged OMCBench audit SHA-256.
+
+The ranking snapshot, 1,050-artifact acquisition plan, verified payloads,
+archive limits, score-blind fingerprints, OMCBench audit, candidate
+`context-max-v1`, development threshold policy, malicious-recall guard,
+450-group holdout size, confidence level, primary gate, stop rules, and
+one-shot holdout rule are unchanged.
+
+This amendment was written after observing only V1 metadata overlap, not any
+baseline or candidate score. V2 must still fail before scoring if its complete
+cross-corpus audit reports any overlap.
