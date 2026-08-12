@@ -381,3 +381,21 @@ Publish:
 
 A negative result—such as sparse MalIR matching µMal—is valuable. In that case,
 prefer the cheaper model and report the evidence.
+
+## 19. OMCBench pilot instantiation
+
+The 2026-08-12 Python pilot is an exploratory group-random instantiation of
+this protocol, not the primary temporal study. It pinned the OMCBench commit,
+manifest SHA-256, ITCS commit, immutable worker-image digest, seed, archive
+limits, and output hashes. The worker read Python archive members in memory and
+never installed, imported, compiled, extracted, or executed a package.
+
+Before splitting, it grouped exact Python source sets and then closed all
+identifier- and literal-normalized AST variants into one `group_id`. The test
+contained 100 benign normalized-AST groups as provisional independence units,
+so the 1% two-system FPR claim gate was underpowered even with zero observed
+false alerts. Fixed-threshold tables were generated only after the locked
+comparison and are claim-ineligible.
+
+See [the full pilot report](OMCBENCH_PILOT_2026-08-12.md) and the
+[payload-free output files](../research/results/omcbench-python-2026-08-12/).

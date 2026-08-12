@@ -107,7 +107,7 @@ That supports the local-flow hypothesis, but it does not establish that ITCS's
 particular provenance pass helps on Python. The relevant experiment is paired:
 run proximity-only and local-flow variants on the identical locked artifacts.
 
-Version 0.5 therefore rejects comparisons when sample IDs or immutable
+Version 0.6 therefore rejects comparisons when sample IDs or immutable
 label/split/group/period metadata differ. It chooses a separate validation
 threshold for each variant at the same target FPR, freezes both thresholds, and
 resamples identical test groups together. The report exposes detections gained
@@ -118,6 +118,42 @@ confidence bound for recall delta, a non-positive upper bound for FPR delta,
 and enough independent benign groups for both systems' one-sided target-FPR
 bounds. A 95% joint gate uses 97.5% per-system bounds via a two-system
 Bonferroni correction. The bundled paired files are synthetic mechanics tests.
+
+### 2.4 Evidence update: isolated OMCBench Python pilot
+
+On 2026-08-12, version 0.6 ran a paired pilot on all 400 Python packages in a
+pinned OMCBench checkout. The worker had no network, no reusable credentials, a
+read-only root and corpus, dropped capabilities, non-root UID, and fixed CPU,
+memory, PID, temporary-storage, member-count, byte-count, path, and compression
+limits. The reader did not extract, install, import, compile, or execute package
+code. Only payload-free metadata was retained in git.
+
+Exact Python source-set hashing found 400 groups. Identifier- and
+literal-normalized AST hashing found 338 groups, including 78 packages across
+16 duplicate groups; the largest group contained 21 variants. Group closure
+was applied before a deterministic 50/50 validation/test split, and 2,000
+paired bootstrap replicates sampled normalized-AST groups.
+
+At the locked target FPR of 1%, both variants selected a threshold above the
+maximum score and achieved 0/100 test recall with 0/100 false positives. With
+100 benign normalized-AST groups treated as independent, the
+Bonferroni-adjusted 97.5% upper bound
+on FPR is 3.62%, so the target is unsupported. The primary result is negative.
+
+Local flow did improve exploratory test ranking: average precision changed
+from 0.5837 to 0.5954 (paired group-bootstrap delta +0.0117, 95% CI
+[+0.0021, +0.0240]), and decision-margin AURC changed from 0.3775 to 0.3737
+(delta -0.0038, 95% CI [-0.0082, -0.0006]). Those metrics do not rescue the
+failed operating point. At a post-hoc threshold of 0.50, local flow recovered
+four malicious rows with no extra benign rows, but FPR remained 44% and the
+paired group test was not significant (`p = 0.125`).
+
+The main diagnosis is score saturation: package-wide additive evidence makes
+large legitimate packages too easy to score near one. A legitimate database
+client produced a true `FILE_READ -> NETWORK_SEND` path, demonstrating that
+exact flow is evidence of movement, not intent. The next experiment must
+redesign aggregation and contextual negative evidence before adding model
+capacity. See [the complete report](OMCBENCH_PILOT_2026-08-12.md).
 
 ## 3. Research hypothesis
 
@@ -221,7 +257,9 @@ Add:
   obfuscation, backup, browser automation, and security tools;
 - a future unlabeled corpus for masked MalIR pretraining only.
 
-No real malware is bundled or downloaded by the current repository.
+No real malware is bundled in this repository. The completed pilot read a
+quarantined external OMCBench checkout in an isolated worker; git contains only
+payload-free hashes, counts, scores, warnings, timings, and public archive names.
 
 ### 6.2 Leakage controls
 
@@ -361,12 +399,13 @@ round-trip; it says nothing about generalization.
 
 ### Test state
 
-Seventy-six automated tests currently pass: 70 Python tests and six browser
+Ninety-two automated tests currently pass: 86 Python tests and six browser
 engine tests. They cover extraction ordering, alias resolution, non-execution,
-syntax errors, deterministic tokens, symlinks and size limits, local-provenance
-counterexamples and gating, sparse learning/serialization, µMal training/loading,
-manifest leakage, low-FPR power, selective metrics, CLI JSON, browser evidence
-fidelity, and benchmark output.
+syntax errors and warning isolation, deterministic tokens, symlinks and size
+limits, bounded hostile archives, source-set/normalized-AST grouping,
+local-provenance counterexamples and gating, sparse learning/serialization,
+µMal training/loading, manifest leakage, low-FPR power, paired group statistics,
+CLI JSON, browser evidence fidelity, and benchmark output.
 
 ## 10. Claim gates
 
@@ -389,11 +428,13 @@ until all corresponding gates pass.
 
 - Metadata audit, locked evaluation, and paired comparison: implemented.
 - Name-independent bounded local value flow and candidate gate: implemented.
+- Bounded non-extracting archive reader and isolated OMCBench runner: implemented.
+- Group-aware 400-package OMCBench pilot: completed; primary claim unsupported.
+- Redesign package aggregation and context using the observed hard negatives.
 - Add bounded function summaries without whole-program graph construction.
-- Build a safe manifest-to-MalIR dataset worker outside the Codespace.
-- Run OMCBench as a pilot, then a statistically powered hard-negative corpus.
-- Calibrate thresholds on validation only and freeze the manifest fingerprint.
-- Add process RSS/CPU profiling to the reproducible experiment record.
+- Build a statistically powered, provenance-rich hard-negative corpus.
+- Calibrate only the redesigned score on validation and freeze all decisions.
+- Add repeated process RSS/CPU profiling to the experiment record.
 
 ### Phase B — model efficiency
 
@@ -422,5 +463,7 @@ that detects malware.” It is:
 > micro-model inference, evaluated under temporal, low-FPR, and CPU-budget
 > constraints.
 
-The next highest-value work is real, leakage-controlled evaluation—not adding
-more Transformer layers.
+The completed pilot confirms that local flow is useful evidence but also shows
+that the current additive package score saturates. The next highest-value work
+is contextual, size-aware aggregation plus a powered hard-negative evaluation—not
+adding more Transformer layers.

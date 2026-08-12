@@ -1,0 +1,88 @@
+{
+  "configuration": {
+    "analysis_latency_includes_archive_read": true,
+    "baseline": "proximity-only",
+    "bootstrap": 2000,
+    "candidate": "candidate-gated-local-flow",
+    "error_handling": "archive-rejection-as-score-zero",
+    "limits": {
+      "max_archive_bytes": 50000000,
+      "max_compression_ratio": 250.0,
+      "max_member_bytes": 1000000,
+      "max_members": 20000,
+      "max_path_bytes": 512,
+      "max_python_bytes": 50000000,
+      "max_total_uncompressed_bytes": 500000000
+    },
+    "max_events": 2000,
+    "max_per_label": 0,
+    "score_kind": "heuristic-rule-risk-not-calibrated-probability",
+    "seed": 20260812,
+    "split_unit": "identifier-and-literal-normalized-python-ast-group",
+    "target_fpr": 0.01,
+    "validation_fraction": 0.5
+  },
+  "corpus": {
+    "archive_set_fingerprint": "6ac772270e1f4ae824d981bcf93b0bb0a4c577660a106a1bdd5d900afe43d93a",
+    "commit": "f0722971eddb654c308106c9086ff69da5b0484b",
+    "expected_commit": "f0722971eddb654c308106c9086ff69da5b0484b",
+    "expected_manifest_sha256": "c3b65ae73dbe78f5a9dbf18a77fb604c431848e4ed093f4c4b078eb6765fb84c",
+    "manifest_sha256": "c3b65ae73dbe78f5a9dbf18a77fb604c431848e4ed093f4c4b078eb6765fb84c",
+    "name": "OMCBench",
+    "pinned": true,
+    "root_recorded_as": "/corpus"
+  },
+  "elapsed_seconds": 158.7783263429992,
+  "environment": {
+    "cgroup_cpu_max": "200000 100000",
+    "cgroup_memory_max": "3221225472",
+    "container_image": "python@sha256:229a2c5bfa27522db7815ea81f9bed70af17ccb9de9fc7ad142b1877b5830d36",
+    "cpu_count": 2,
+    "platform": "Linux-6.8.0-1052-azure-x86_64-with-glibc2.41",
+    "python": "3.12.13"
+  },
+  "finished_at": "2026-08-12T08:52:25.032139+00:00",
+  "grouping": {
+    "exact_python_source_set_groups": 400,
+    "exact_source_duplicate_groups": 0,
+    "largest_normalized_ast_group": 21,
+    "method": "identifier-and-literal-normalized-python-ast-v1",
+    "normalized_ast_duplicate_groups": 16,
+    "normalized_ast_groups": 338,
+    "packages_in_normalized_ast_duplicate_groups": 78
+  },
+  "output_sha256": {
+    "local_flow_predictions.jsonl": "c5d7b6778212c69fcacc8e8cc46774cfb27571ab51b164bb41dde060c57c6c45",
+    "paired_report.json": "6af9a4f9fe4628f01ea2043cfa03b408048c5b7e289531f202e0b754ad4fa04c",
+    "proximity_predictions.jsonl": "0df64641118ca675f4f87cef8d0a01cc7e78a650332159bd8cc23d3567cb5da0",
+    "sample_audit.jsonl": "654738c01823a4e7dd6919563f7c056db1e85e29acdb5c2531bfcc3ca7b5263f"
+  },
+  "repository_commit": "dbee8d05da6c46fc22088056f747fd6b190e8006",
+  "results": {
+    "claim_status": "underpowered-target-fpr",
+    "dataflow_paths": 89,
+    "parse_error_files": 21,
+    "python_bytes": 99801279,
+    "python_files": 10208,
+    "score_changed_packages": 16,
+    "status_counts": {
+      "ok": 400
+    }
+  },
+  "schema": "itcs.omcbench-pilot.v1",
+  "started_at": "2026-08-12T08:49:46.252613+00:00",
+  "support": {
+    "groups": {
+      "test_benign": 100,
+      "test_malicious": 85,
+      "validation_benign": 100,
+      "validation_malicious": 53
+    },
+    "packages": {
+      "test_benign": 100,
+      "test_malicious": 100,
+      "validation_benign": 100,
+      "validation_malicious": 100
+    }
+  }
+}

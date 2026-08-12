@@ -173,7 +173,7 @@ Máy: 2 vCPU, khoảng 8 GB RAM, Python 3.12.1, Linux x86-64.
 | Sparse checkpoint | 7.259 byte |
 | µMal FP32 checkpoint | 2.280.321 byte |
 | µMal inference, 2 thread | median 6,49 ms; p95 12,50 ms |
-| Test | 70 Python + 6 browser test pass |
+| Test | 86 Python + 6 browser test pass |
 | Môi trường train PyTorch | 992 MB; không cần cho core/sparse |
 
 Mỗi mode được warm-up rồi đo 21 lượt với tracemalloc. Một probe bảy lượt trước
@@ -189,6 +189,44 @@ Transformer quantized bị lỗi inference trong môi trường hiện tại. Nh
 không được đưa vào sản phẩm. INT8 chỉ nên quay lại bằng torchao hoặc ONNX khi
 benchmark thật sự tốt hơn FP32.
 
+## Pilot thật trên OMCBench Python
+
+Ngày 2026-08-12, ITCS đã chạy đủ 400 archive Python của OMCBench được khóa theo
+commit và manifest hash: 200 benign, 200 malicious. Payload ở ngoài git và chỉ
+được đọc trong Docker worker thứ hai: tắt network, root/corpus read-only, không
+credential, non-root, bỏ toàn bộ capability, giới hạn 2 CPU, 3 GiB RAM, 64 PID,
+số member, byte và compression ratio. Runner không extract ra đĩa, không pip
+install, import, compile hay chạy code trong package.
+
+Sau khi hash source-set và AST đã ẩn identifier/literal, 400 package chỉ còn 338
+nhóm phân tích tạm thời. Có 78 package thuộc 16 nhóm biến thể; nhóm lớn nhất có 21
+package. Tất cả package trong cùng nhóm được giữ chung một split và bootstrap
+2.000 lượt theo nhóm, không theo từng row.
+
+Kết quả chính tại target FPR 1% là âm: cả proximity-only và local-flow đều phải
+chọn threshold lớn hơn 1 trên validation, nên test phát hiện 0/100 malicious và
+có 0/100 false positive. Với chỉ 100 nhóm benign, cận trên FPR 97,5% vẫn là
+3,62%; chưa đủ lực chứng minh target 1%.
+
+Local flow vẫn cải thiện xếp hạng exploratory:
+
+| Metric test | Proximity | Local flow | Delta, CI 95% theo nhóm |
+|---|---:|---:|---:|
+| Average precision | 0,5837 | 0,5954 | +0,0117 [+0,0021; +0,0240] |
+| Decision-margin AURC | 0,3775 | 0,3737 | -0,0038 [-0,0082; -0,0006] |
+
+Ở threshold post-hoc 0,50, local flow thêm 4 true positive và không thêm false
+positive, nhưng FPR vẫn 44% và paired group test không có ý nghĩa (`p=0,125`).
+Một hard negative quan trọng là database client hợp lệ có flow thật
+`FILE_READ -> NETWORK_SEND`: dataflow chứng minh dữ liệu di chuyển, không chứng
+minh ý đồ xấu.
+
+Kết luận: giữ local flow làm lớp bằng chứng, nhưng phải thay cách cộng điểm toàn
+package bằng aggregation theo file/function, chuẩn hóa size và context benign
+trước khi tăng kích thước LLM. Xem
+[báo cáo đầy đủ](OMCBENCH_PILOT_2026-08-12.md) và
+[metadata không chứa payload](../research/results/omcbench-python-2026-08-12/).
+
 ## Thiết kế thí nghiệm thật
 
 ### Dữ liệu
@@ -198,9 +236,10 @@ bổ sung benign theo thời gian, nhóm download và loại package; bổ sung 
 negative như installer, deployment, backup, networking, browser automation và
 security tools.
 
-Không tải hoặc bung malware ngay trong Codespace này. Archive thật phải được xử
-lý ở worker cô lập, không credential, tắt network và có giới hạn path traversal,
-symlink, nesting, compression ratio, số file và tổng byte.
+Repo không chứa malware. Pilot đã tải corpus vào vùng quarantine ngoài git và
+đọc archive bằng worker con cô lập, không credential, tắt network và có giới hạn
+path traversal, symlink, compression ratio, số file và tổng byte. Mọi lượt sau
+phải giữ cùng ranh giới này; không được install hoặc chạy sample.
 
 ### Chia tập để chống leakage
 
@@ -252,12 +291,13 @@ Nếu chưa đạt các cổng này, mô tả đúng là “prototype nghiên c�
 
 ## Việc nên làm tiếp theo
 
-1. Viết worker ingest OMCBench an toàn bên ngoài Codespace.
-2. Dùng OMCBench làm pilot cho ablation proximity-only so với local flow.
+1. Thay cộng điểm toàn package bằng top-k theo file/function và chuẩn hóa size.
+2. Tách file-to-network nhạy cảm khỏi network client hợp lệ; thêm negative context.
 3. Thêm bounded function summaries nhưng không dựng whole-program call graph.
-4. Tạo hard-negative corpus đủ lực cho FPR, audit manifest và khóa prediction.
-5. Calibrate gate trên validation; đo AURC và reject-rate drift thật.
-6. Chỉ sau đó mới thử INT8 và frontend JavaScript.
+4. Tạo hard-negative corpus có ít nhất 368 nhóm benign cho gate FPR 1%, rồi mở
+   rộng lên hàng nghìn nhóm cho target 0,1%.
+5. Chỉ calibrate score mới trên validation; đo AURC và reject-rate drift thật.
+6. So với sparse MalIR trước; chỉ sau đó mới thử INT8 và frontend JavaScript.
 
 Bản kế hoạch tiếng Anh đầy đủ, nguồn tham khảo và claim gates nằm trong
 [RESEARCH.md](RESEARCH.md). Contract manifest/prediction nằm trong

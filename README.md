@@ -57,6 +57,8 @@ compute, and a tiny domain language model trained from scratch.
   behavior Transformer that runs entirely inside the browser.
 - Skips symlinks and common dependency/build folders; bounds files, bytes, and
   emitted events.
+- Provides a research-only, non-extracting wheel/ZIP/TAR.GZ reader with path,
+  member, byte, compression-ratio, duplicate-path, and symlink limits.
 - Audits metadata-only dataset manifests for artifact, group, family,
   campaign, time, and post-MalIR representation leakage.
 - Evaluates locked predictions with validation-only thresholds, low-FPR power
@@ -187,6 +189,18 @@ least 2,995 independent benign groups; the command labels smaller tests
 underpowered.
 See [the research data contract](docs/RESEARCH_DATA_FORMAT.md).
 
+### Real-package pilot result
+
+A safely isolated, metadata-published pilot now compares proximity-only rules
+with candidate-gated local flow on all 400 Python packages in pinned OMCBench.
+Normalized-AST grouping reduced the split to 338 provisional analysis groups.
+Local flow improved test average precision from 0.5837 to 0.5954, but the
+locked 1% FPR operating point detected 0/100 malicious test packages for both
+systems. The primary claim is unsupported and statistically underpowered;
+this is a useful negative result, not a detection-quality claim. See the
+[full pilot report](docs/OMCBENCH_PILOT_2026-08-12.md) and
+[payload-free raw metadata](research/results/omcbench-python-2026-08-12/).
+
 ## Measured on the target Codespace
 
 Environment: 2 vCPU, about 8 GB RAM, Python 3.12.1, Linux x86-64. Measurements
@@ -204,6 +218,7 @@ were taken on 2026-08-12.
 | Default µMal | 567,746 parameters; 2,280,321-byte FP32 checkpoint |
 | Browser µMal Nano | 3,538 parameters; 72,620-byte ES module |
 | µMal single-example inference, 2 threads | median 6.49 ms; p95 12.50 ms |
+| OMCBench pilot, 400 archives / 10,208 `.py` files | 158.78 s end-to-end in isolated 2-CPU worker |
 
 The corpus benchmark uses repeated inert templates (95% ordinary and 5%
 suspicious-shaped source). These numbers measure cost, not detection quality.
@@ -251,20 +266,26 @@ are not calibrated probabilities and none is whole-program proof.
 - src/malir/manifest.py: metadata audit and representation leakage checks.
 - src/malir/evaluation.py: low-FPR, calibration, AURC, and group bootstrap.
 - src/malir/comparison.py: aligned effects, paired group bootstrap, and claim gate.
+- src/malir/archive.py: bounded, non-extracting research archive reader.
+- src/malir/dedup.py: exact source-set and normalized-AST grouping hashes.
+- scripts/omcbench_pilot.py: pinned, metadata-only paired research runner.
 - web/: dependency-free GitHub Pages analyzer and embedded µMal Nano weights.
 - scripts/train_web_model.py: reproducible CPU trainer/exporter for µMal Nano.
 - docs/MALIR_SPEC.md: IR contract and versioning.
+- docs/OMCBENCH_PILOT_2026-08-12.md: real-package pilot method and results.
 - docs/RESEARCH.md: literature gap, experiments, and claim gates.
 - docs/THREAT_MODEL.md: security boundary and known evasions.
 - tests/fixtures: inert code that is parsed only, never imported.
 
 ## Known limits
 
-Version 0.5 performs bounded intraprocedural value provenance, not full
+Version 0.6 performs bounded intraprocedural value provenance, not full
 interprocedural or whole-program data-flow analysis. It does not yet summarize
-function calls, track object attributes or mutation precisely, unpack archives,
-inspect native extensions, deobfuscate arbitrary strings, or observe
-runtime-only behavior. It supports Python source only. See the research plan
+function calls, track object attributes or mutation precisely, inspect archives
+through the normal CLI, inspect nested/native payloads, deobfuscate arbitrary
+strings, or observe runtime-only behavior. Its isolated research reader scans
+bounded Python members in memory without extracting them. It supports Python
+source only. See the research plan
 before extending the frontend to JavaScript, Go, or Rust.
 
 ## Safe contribution rule

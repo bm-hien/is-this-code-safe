@@ -28,6 +28,7 @@
       </a>
       <nav aria-label="Main navigation">
         <a href="#method">How it works</a>
+        <a href="#research">Research</a>
         <a href="#limits">Limits</a>
         <a
           class="github-link"
@@ -308,6 +309,48 @@
             </p>
           </li>
         </ol>
+      </section>
+
+      <section
+        id="research"
+        class="research-section"
+        aria-labelledby="research-title"
+      >
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Real-package pilot · 2026-08-12</p>
+            <h2 id="research-title">Useful evidence. Not a solved detector.</h2>
+          </div>
+          <p>
+            400 pinned OMCBench Python packages · 338 normalized-AST groups
+          </p>
+        </div>
+        <div class="research-grid">
+          <article>
+            <span>Ranking</span>
+            <strong>0.5837 → 0.5954</strong>
+            <p>Test average precision improved with bounded local flow.</p>
+          </article>
+          <article>
+            <span>Locked 1% FPR gate</span>
+            <strong>Unsupported</strong>
+            <p>Both variants reached 0/100 recall; the test was underpowered.</p>
+          </article>
+          <article>
+            <span>Safety</span>
+            <strong>0 payloads in Git</strong>
+            <p>No package was installed, imported, extracted, or executed.</p>
+          </article>
+        </div>
+        <p class="research-note">
+          The honest result is score saturation: flow improves ordering, while
+          package aggregation still produces too many benign high scores.
+          <a
+            href="https://github.com/bm-hien/is-this-code-safe/blob/main/docs/OMCBENCH_PILOT_2026-08-12.md"
+            rel="noreferrer"
+            >Read the reproducible report <span aria-hidden="true">→</span></a
+          >
+        </p>
       </section>
 
       <section
