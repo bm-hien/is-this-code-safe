@@ -2,9 +2,11 @@ from pathlib import Path
 
 import pytest
 
+import scripts.acquire_pypi_reference as acquisition
 from scripts.acquire_pypi_reference import (
     MAX_ARTIFACT_BYTES,
     Artifact,
+    ResponseLimitError,
     _artifact_preference,
     _osv_identifiers,
     _prepare_output,
@@ -130,6 +132,21 @@ def test_prepare_output_rejects_symlink(tmp_path: Path):
 
     with pytest.raises(ValueError, match="symlink"):
         _prepare_output(link)
+
+
+def test_oversized_project_metadata_is_logged_as_exclusion(monkeypatch):
+    def oversized(_url):
+        raise ResponseLimitError("too large")
+
+    monkeypatch.setattr(acquisition, "_request_json", oversized)
+    record = acquisition._inspect_project(601, {"project": "huge-metadata"})
+
+    assert record == {
+        "rank": 601,
+        "ranking_project": "huge-metadata",
+        "status": "excluded",
+        "reason": "pypi-metadata-response-too-large",
+    }
 
 
 def test_metadata_request_rejects_hosts_outside_allowlist():

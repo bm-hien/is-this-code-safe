@@ -36,6 +36,10 @@ MAX_TOTAL_BYTES = 4 * 1024 * 1024 * 1024
 MAX_JSON_BYTES = 20 * 1024 * 1024
 
 
+class ResponseLimitError(ValueError):
+    """A remote response exceeded a frozen acquisition byte limit."""
+
+
 @dataclass(frozen=True, slots=True)
 class Artifact:
     rank: int
@@ -216,6 +220,8 @@ def _inspect_project(rank: int, ranking_row: dict[str, Any]) -> dict[str, Any]:
         if error.code == 404:
             return _exclusion(rank, project, "pypi-project-not-found")
         raise
+    except ResponseLimitError:
+        return _exclusion(rank, project, "pypi-metadata-response-too-large")
     artifact, reason = _select_artifact(payload, rank, project)
     if artifact is None:
         return _exclusion(rank, project, reason)
@@ -587,10 +593,10 @@ def _request_bytes(
                     raise ValueError("remote metadata redirected outside its host")
                 declared = response.headers.get("Content-Length")
                 if declared is not None and int(declared) > limit:
-                    raise ValueError("remote response exceeds byte limit")
+                    raise ResponseLimitError("remote response exceeds byte limit")
                 payload = response.read(limit + 1)
                 if len(payload) > limit:
-                    raise ValueError("remote response exceeds byte limit")
+                    raise ResponseLimitError("remote response exceeds byte limit")
                 return payload
         except urllib.error.HTTPError as error:
             if error.code == 404 or error.code < 500 and error.code != 429:
