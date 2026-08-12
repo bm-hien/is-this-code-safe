@@ -23,7 +23,6 @@ from malir.dedup import normalized_ast_hash, source_set_hash
 from malir.detector import CascadeConfig, decide
 from scripts.acquire_pypi_reference import (
     MAX_ARTIFACT_BYTES,
-    STUDY_ID,
     _file_sha256,
     _read_jsonl,
     _verify_plan,
@@ -32,6 +31,7 @@ from scripts.acquire_pypi_reference import (
 )
 from scripts.prepare_pypi_reference import _representation_hash
 
+STUDY_ID = "itcs-pypi-hard-negative-2026-08-12-v2"
 EXPECTED_OMC_AUDIT_SHA256 = (
     "654738c01823a4e7dd6919563f7c056db1e85e29acdb5c2531bfcc3ca7b5263f"
 )
@@ -95,8 +95,9 @@ def run_development(args: argparse.Namespace) -> dict[str, Any]:
     split_rows, prep_record, prep_hashes = _verify_preparation(
         acquisition, preparation, plan
     )
-    omc_rows = _load_omc_validation(Path(args.omcbench_audit))
-    cross_corpus = _cross_corpus_audit(omc_rows, split_rows)
+    omc_audit_rows = _load_omc_audit(Path(args.omcbench_audit))
+    omc_rows = [row for row in omc_audit_rows if row["split"] == "validation"]
+    cross_corpus = _cross_corpus_audit(omc_audit_rows, split_rows)
 
     pypi_rows = _score_pypi_partition(
         acquisition,
@@ -362,7 +363,7 @@ def _link_split_to_acquisition(rows: list[dict[str, Any]], acquisition: Path) ->
             raise ValueError("selected artifact sample ID differs from its hash")
 
 
-def _load_omc_validation(path: Path) -> list[dict[str, Any]]:
+def _load_omc_audit(path: Path) -> list[dict[str, Any]]:
     if _file_sha256(path) != EXPECTED_OMC_AUDIT_SHA256:
         raise ValueError("OMCBench audit hash mismatch")
     rows = _read_jsonl(path)
@@ -376,13 +377,10 @@ def _load_omc_validation(path: Path) -> list[dict[str, Any]]:
         ("test", 1): 100,
     }:
         raise ValueError("unexpected OMCBench split support")
-    validation = []
     for row in rows:
-        if row["split"] == "test":
-            continue
-        _require_omc_validation(row)
-        validation.append(row)
-    return validation
+        if row["split"] == "validation":
+            _require_omc_validation(row)
+    return rows
 
 
 def _require_omc_validation(row: dict[str, Any]) -> None:
@@ -839,6 +837,7 @@ def _code_hashes() -> dict[str, str]:
         "scripts/acquire_pypi_reference.py",
         "scripts/prepare_pypi_reference.py",
         "scripts/pypi_hard_negative_study.py",
+        "scripts/resplit_pypi_reference.py",
         "src/malir/archive.py",
         "src/malir/dedup.py",
         "src/malir/detector.py",

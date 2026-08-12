@@ -1,4 +1,5 @@
 import math
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +11,7 @@ from scripts.pypi_hard_negative_study import (
     _clopper_pearson_upper,
     _development_operating_points,
     _holdout_report,
+    _load_omc_audit,
     _require_omc_validation,
     _validate_split_manifest,
 )
@@ -40,6 +42,10 @@ def test_development_passes_acquisition_to_preparation_verifier(monkeypatch):
     with pytest.raises(StopBeforeScoring):
         study.run_development(args)
     assert seen == [("/acquisition", "/preparation", {"path": "/acquisition"})]
+
+
+def test_active_study_id_is_leakage_closed_v2():
+    assert study.STUDY_ID == "itcs-pypi-hard-negative-2026-08-12-v2"
 
 
 def test_zero_event_upper_bound_matches_exact_formula():
@@ -118,6 +124,24 @@ def test_holdout_gate_passes_only_with_zero_alerts():
     failed = _holdout_report(rows, lock)
     assert failed["primary_gate"]["status"] == "fail"
     assert failed["systems"]["candidate"]["alert_groups"] == 1
+
+
+def test_omc_audit_retains_test_metadata_for_leakage_checks(monkeypatch):
+    rows = [
+        {"split": split, "label": label, "status": "ok"}
+        for split in ("validation", "test")
+        for label in (0, 1)
+        for _ in range(100)
+    ]
+    monkeypatch.setattr(
+        study, "_file_sha256", lambda path: study.EXPECTED_OMC_AUDIT_SHA256
+    )
+    monkeypatch.setattr(study, "_read_jsonl", lambda path: rows)
+
+    loaded = _load_omc_audit(Path("ignored.jsonl"))
+
+    assert len(loaded) == 400
+    assert sum(row["split"] == "test" for row in loaded) == 200
 
 
 def test_omcbench_test_row_cannot_reach_scoring_boundary():
