@@ -81,10 +81,13 @@ def test_context_max_uses_maximum_context_instead_of_package_sum():
     )
 
     assert decide([analysis]).rule_score == 54.0
-    assert decide(
-        [analysis],
-        config=CascadeConfig(rule_aggregation="context-max-v1"),
-    ).rule_score == 27.0
+    assert (
+        decide(
+            [analysis],
+            config=CascadeConfig(rule_aggregation="context-max-v1"),
+        ).rule_score
+        == 27.0
+    )
 
 
 def test_context_max_empty_analysis_scores_zero():

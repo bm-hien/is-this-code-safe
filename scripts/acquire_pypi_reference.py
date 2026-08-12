@@ -20,9 +20,7 @@ from pathlib import Path, PurePath
 from typing import Any
 
 STUDY_ID = "itcs-pypi-hard-negative-2026-08-12-v1"
-RANKING_URL = (
-    "https://hugovk.dev/top-pypi-packages/top-pypi-packages.min.json"
-)
+RANKING_URL = "https://hugovk.dev/top-pypi-packages/top-pypi-packages.min.json"
 RANKING_SHA256 = "bb36eb336787975315f66eb0834073e9b0a72593c486cd2d704991046f465b04"
 RANKING_LAST_UPDATE = "2026-08-01 06:34:08"
 RANKING_ROWS = 15_000
@@ -284,9 +282,7 @@ def _select_artifact(
     ), ""
 
 
-def _valid_file_metadata(
-    filename: Any, url: Any, sha256: Any, size: Any
-) -> bool:
+def _valid_file_metadata(filename: Any, url: Any, sha256: Any, size: Any) -> bool:
     if not all(isinstance(value, str) for value in (filename, url, sha256)):
         return False
     if PurePath(filename).name != filename or len(filename.encode()) > 512:
@@ -717,7 +713,9 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
         try:
             row = json.loads(line)
         except json.JSONDecodeError as error:
-            raise ValueError(f"invalid JSONL line {line_number}: {path.name}") from error
+            raise ValueError(
+                f"invalid JSONL line {line_number}: {path.name}"
+            ) from error
         if not isinstance(row, dict):
             raise TypeError(f"JSONL row is not an object: {path.name}")
         rows.append(row)
