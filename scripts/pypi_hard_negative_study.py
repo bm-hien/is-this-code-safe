@@ -92,7 +92,9 @@ def run_development(args: argparse.Namespace) -> dict[str, Any]:
     omcbench = _regular_directory(Path(args.omcbench_root))
     output = _empty_output(Path(args.output_dir))
     plan = _verify_plan(acquisition)
-    split_rows, prep_record, prep_hashes = _verify_preparation(preparation, plan)
+    split_rows, prep_record, prep_hashes = _verify_preparation(
+        acquisition, preparation, plan
+    )
     omc_rows = _load_omc_validation(Path(args.omcbench_audit))
     cross_corpus = _cross_corpus_audit(omc_rows, split_rows)
 

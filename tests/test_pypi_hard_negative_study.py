@@ -1,7 +1,9 @@
 import math
+from types import SimpleNamespace
 
 import pytest
 
+import scripts.pypi_hard_negative_study as study
 from scripts.pypi_hard_negative_study import (
     CONFIDENCE,
     _binomial_cdf,
@@ -11,6 +13,33 @@ from scripts.pypi_hard_negative_study import (
     _require_omc_validation,
     _validate_split_manifest,
 )
+
+
+def test_development_passes_acquisition_to_preparation_verifier(monkeypatch):
+    class StopBeforeScoring(Exception):
+        pass
+
+    seen = []
+    monkeypatch.setattr(study, "_regular_directory", lambda path: path)
+    monkeypatch.setattr(study, "_empty_output", lambda path: path)
+    monkeypatch.setattr(study, "_verify_plan", lambda path: {"path": str(path)})
+
+    def verify(acquisition, preparation, plan):
+        seen.append((str(acquisition), str(preparation), plan))
+        raise StopBeforeScoring
+
+    monkeypatch.setattr(study, "_verify_preparation", verify)
+    args = SimpleNamespace(
+        acquisition_dir="/acquisition",
+        preparation_dir="/preparation",
+        omcbench_root="/omcbench",
+        omcbench_audit="/audit.jsonl",
+        output_dir="/output",
+    )
+
+    with pytest.raises(StopBeforeScoring):
+        study.run_development(args)
+    assert seen == [("/acquisition", "/preparation", {"path": "/acquisition"})]
 
 
 def test_zero_event_upper_bound_matches_exact_formula():
