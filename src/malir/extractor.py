@@ -63,7 +63,9 @@ class PythonExtractor:
         result = FileAnalysis(path=path, sha256=digest, bytes_read=len(source.encode()))
         try:
             with warnings.catch_warnings():
-                warnings.simplefilter("ignore", SyntaxWarning)
+                # Parser warnings contain attacker-controlled source text and
+                # changed category between supported Python versions.
+                warnings.simplefilter("ignore")
                 tree = ast.parse(source, filename=path, type_comments=True)
             visitor = _BehaviorVisitor(path, self.limits.max_events)
             visitor.visit(tree)
