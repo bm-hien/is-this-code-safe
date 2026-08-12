@@ -1,3 +1,4 @@
+import warnings
 from pathlib import Path
 
 from malir.detector import decide
@@ -66,3 +67,12 @@ def test_event_limit_is_explicit():
     assert len(result.events) == 1
     assert result.event_limit_reached is True
     assert decide([result]).verdict == "review"
+
+
+def test_untrusted_syntax_warning_is_not_written_to_process_logs():
+    source = "value = '" + chr(92) + "M'\n"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = PythonExtractor().analyze_source(source, "untrusted.py")
+    assert result.parse_error is None
+    assert caught == []

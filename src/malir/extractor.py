@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,7 +62,9 @@ class PythonExtractor:
         digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
         result = FileAnalysis(path=path, sha256=digest, bytes_read=len(source.encode()))
         try:
-            tree = ast.parse(source, filename=path, type_comments=True)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", SyntaxWarning)
+                tree = ast.parse(source, filename=path, type_comments=True)
             visitor = _BehaviorVisitor(path, self.limits.max_events)
             visitor.visit(tree)
         except (RecursionError, SyntaxError, ValueError) as error:
