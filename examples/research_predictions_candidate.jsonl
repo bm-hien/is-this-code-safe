@@ -1,0 +1,12 @@
+{"sample_id":"tr-benign-1","label":0,"score":0.03,"split":"train","group_id":"group-1","period":"2025-01","model_invoked":false,"latency_ms":1.5}
+{"sample_id":"tr-benign-2","label":0,"score":0.10,"split":"train","group_id":"group-2","period":"2025-01","model_invoked":false,"latency_ms":2.2}
+{"sample_id":"tr-malicious-1","label":1,"score":0.92,"split":"train","group_id":"group-3","period":"2025-02","model_invoked":false,"latency_ms":2.9}
+{"sample_id":"tr-malicious-2","label":1,"score":0.82,"split":"train","group_id":"group-4","period":"2025-02","model_invoked":false,"latency_ms":3.6}
+{"sample_id":"va-benign-1","label":0,"score":0.04,"split":"validation","group_id":"group-5","period":"2025-04","model_invoked":false,"latency_ms":1.5}
+{"sample_id":"va-benign-2","label":0,"score":0.18,"split":"validation","group_id":"group-6","period":"2025-04","model_invoked":false,"latency_ms":2.2}
+{"sample_id":"va-malicious-1","label":1,"score":0.94,"split":"validation","group_id":"group-7","period":"2025-05","model_invoked":false,"latency_ms":2.9}
+{"sample_id":"va-malicious-2","label":1,"score":0.75,"split":"validation","group_id":"group-8","period":"2025-05","model_invoked":true,"latency_ms":3.6}
+{"sample_id":"te-benign-1","label":0,"score":0.02,"split":"test","group_id":"group-9","period":"2025-07","model_invoked":false,"latency_ms":1.5}
+{"sample_id":"te-benign-2","label":0,"score":0.15,"split":"test","group_id":"group-10","period":"2025-07","model_invoked":false,"latency_ms":2.2}
+{"sample_id":"te-malicious-1","label":1,"score":0.86,"split":"test","group_id":"group-11","period":"2025-08","model_invoked":false,"latency_ms":2.9}
+{"sample_id":"te-malicious-2","label":1,"score":0.78,"split":"test","group_id":"group-12","period":"2025-08","model_invoked":true,"latency_ms":3.6}

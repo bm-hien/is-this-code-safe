@@ -334,11 +334,20 @@ The repository's metadata-only audit path is:
 itcs audit-manifest manifest.jsonl --strict --json
 itcs evaluate-predictions predictions.jsonl \
   --target-fpr 0.001 --bootstrap 2000 --seed 0 --json
+itcs compare-predictions baseline.jsonl candidate.jsonl \
+  --target-fpr 0.001 --bootstrap 2000 --seed 0 --json
 ~~~
 
 The evaluator derives confidence from the malicious probability, chooses the
 decision threshold on rows marked `validation`, and applies it unchanged to
 rows marked `test`. It bootstraps `group_id`, not individual rows.
+
+The comparator first requires exact sample alignment and immutable metadata,
+then independently freezes one validation threshold per system. It resamples
+the same test groups for both systems and reports paired effect intervals plus
+benign/malicious decision transitions. Its primary gate also requires enough
+independent benign groups to support the stated target FPR for both systems.
+For a 95% joint gate, use 97.5% one-sided bounds per system by Bonferroni.
 
 Additional test runs after viewing results are exploratory and must be labeled.
 

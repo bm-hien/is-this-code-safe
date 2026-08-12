@@ -32,6 +32,7 @@ với signature, sandbox hoặc analyst; không nên tự nhận là antivirus h
 | Cerebro | Behavior sequence + BERT/RoBERTa | Giảm model và chi phí biểu diễn |
 | SCORE | AST/structure + mô hình nhẹ | Chuẩn hóa IR chuyên cho hành vi malware |
 | MalGuard | 132 feature + RF/XGBoost mạnh | Thêm thứ tự hành vi và evidence |
+| Donapi | Tín hiệu đơn/API set thiếu thứ tự gây nhiều false positive | Đo behavior combination, thứ tự và hard negative |
 | MOLOT | Call graph + BERT + SHAP; bỏ data flow vì xử lý quá chậm | Loại full call graph/SHAP khỏi common path |
 | CodeQL local data flow | Local flow rẻ và chính xác hơn global flow cho nhiều query | Bắt đầu bằng provenance nội hàm có giới hạn |
 | MalTotal | Semantic slicing có LLM hỗ trợ | Pipeline local không phụ thuộc LLM lớn |
@@ -65,13 +66,14 @@ với signature, sandbox hoặc analyst; không nên tự nhận là antivirus h
   không quá 0,1% cần ít nhất 2.995 nhóm benign. OMCBench Python chỉ có 200
   benign nên chỉ làm pilot; nó không đủ lực thống kê cho claim low-FPR.
 
-Repo hiện có `itcs audit-manifest` và `itcs evaluate-predictions` để biến ba
-điều trên thành kiểm tra tự động, không đụng vào nội dung malware.
+Repo hiện có `itcs audit-manifest`, `itcs evaluate-predictions` và
+`itcs compare-predictions` để biến các điều trên thành kiểm tra tự động, không
+đụng vào nội dung malware.
 
 Một kết luận kỹ thuật khác đến từ đối chiếu CodeQL, MOLOT và PyGuard: local
 value flow đủ rẻ và chính xác hơn proximity/global flow cho nhiều bài toán,
 trong khi full call graph, data flow toàn cục và SHAP không hợp common path 2
-CPU. Vì vậy bản 0.4 chỉ chạy pass provenance thứ hai khi event gate tìm thấy
+CPU. Vì vậy từ bản 0.4, pass provenance thứ hai chỉ chạy khi event gate tìm thấy
 cặp source/sink có thể tạo path. Thiết kế này không dựng call graph và không
 đi qua ranh giới function.
 
@@ -141,13 +143,22 @@ Prediction evaluator bắt buộc có validation/test. Threshold tại target FP
 count, AP, Brier, ECE, AURC, risk tại nhiều coverage, group bootstrap, metric
 theo thời gian, tỷ lệ gọi µMal và cận tin cậy FPR.
 
+Comparator v0.5 bắt buộc hai file có cùng sample và metadata bất biến. Mỗi hệ
+thống tự chọn threshold trên validation ở cùng target FPR, sau đó cả hai được
+khóa trên test và bootstrap theo cùng `group_id`. Báo cáo chỉ mở claim gate khi
+CI của recall tăng, FPR không tăng và cả hai tập benign đủ lực thống kê. Cổng
+chung 95% dùng bound 97,5% cho từng hệ thống theo Bonferroni hai phía so sánh.
+
 ~~~bash
 itcs audit-manifest examples/research_manifest.jsonl --strict --json
 itcs evaluate-predictions examples/research_predictions.jsonl \
   --target-fpr 0.001 --bootstrap 2000 --seed 0 --json
+itcs compare-predictions examples/research_predictions.jsonl \
+  examples/research_predictions_candidate.jsonl \
+  --target-fpr 0.001 --bootstrap 2000 --seed 0 --json
 ~~~
 
-Hai file ví dụ đều tổng hợp; không phải kết quả detection.
+Các file ví dụ đều tổng hợp; không phải kết quả detection.
 
 ## Kết quả trên codespaces-a90760
 
@@ -162,7 +173,7 @@ Máy: 2 vCPU, khoảng 8 GB RAM, Python 3.12.1, Linux x86-64.
 | Sparse checkpoint | 7.259 byte |
 | µMal FP32 checkpoint | 2.280.321 byte |
 | µMal inference, 2 thread | median 6,49 ms; p95 12,50 ms |
-| Test | 63 Python + 6 browser test pass |
+| Test | 70 Python + 6 browser test pass |
 | Môi trường train PyTorch | 992 MB; không cần cho core/sparse |
 
 Mỗi mode được warm-up rồi đo 21 lượt với tracemalloc. Một probe bảy lượt trước

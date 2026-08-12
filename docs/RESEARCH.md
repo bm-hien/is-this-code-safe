@@ -24,6 +24,7 @@ signatures, reputation, sandboxing, or an analyst.
 | [Cerebro (2023)](https://arxiv.org/abs/2309.02637) | Converts package behavior to sequences and classifies them with BERT/RoBERTa | Behavior abstraction can remove irrelevant source syntax | Transformer and extraction cost; evidence and CPU deployment |
 | [SCORE (2024)](https://arxiv.org/abs/2411.08182) | Uses syntax highlighting/AST structure with lightweight sequential and graph models | Structural representation may matter more than model scale | A security-specific, cross-language behavior contract |
 | [MalGuard (2025)](https://arxiv.org/abs/2506.14466) | Reports competitive RF/XGBoost results from 132 static features | Strong cheap baselines are mandatory | Temporal degradation and open-world generalization |
+| [Donapi (2024)](https://www.usenix.org/conference/usenixsecurity24/presentation/huang-cheng) | Finds that individual suspicious behaviors and unordered API sets create many false positives | Test behavior combinations, ordering, and hard negatives | Its dynamic Node.js pipeline is not ITCS's static Python setting |
 | [MOLOT (2026)](https://arxiv.org/abs/2606.07792) | Interprocedural behavior sequences, BERT, and SHAP explanations | Representation and explanation can dominate latency | Remove full call-graph/SHAP cost from the common path |
 | [CodeQL Python data flow guide](https://codeql.github.com/docs/codeql-language-guides/analyzing-data-flow-in-python/) | Local flow is cheaper and more precise than global flow; local taint also follows non-value-preserving transforms | Start with bounded intraprocedural provenance | This is design guidance, not an ITCS efficacy result |
 | [MalTotal (2026)](https://arxiv.org/abs/2608.03232) | LLM-assisted sensitive-API discovery plus hybrid semantic slicing across five languages | Selective semantic reduction can sharply cut token cost | It still uses an LLM-assisted pipeline; results need independent replication |
@@ -65,9 +66,9 @@ Three findings materially change the ITCS experiment design:
    zero errors. OMCBench's construction section specifies only 200 benign
    Python packages, so it is a pilot benchmark rather than low-FPR evidence.
 
-The repository implements these controls in `itcs audit-manifest` and
-`itcs evaluate-predictions`. Both operate on bounded metadata/prediction
-JSONL; neither opens or executes package content.
+The repository implements these controls in `itcs audit-manifest`,
+`itcs evaluate-predictions`, and `itcs compare-predictions`. All operate on
+bounded metadata/prediction JSONL; none opens or executes package content.
 
 ### 2.2 Evidence update: provenance without whole-program cost
 
@@ -97,6 +98,26 @@ Those labels are qualitative evidence tiers, not calibrated probabilities.
 Counterexample tests cover reassignment, unrelated constant payloads, URL-only
 provenance, branch joins, unknown local transforms, and callable boundaries.
 They validate implementation semantics, not detection accuracy on real malware.
+
+### 2.3 Evidence update: paired claims, not two independent scorecards
+
+Donapi reports that single suspicious behaviors and unordered API sets create
+false positives, while behavior combinations and order improve discrimination.
+That supports the local-flow hypothesis, but it does not establish that ITCS's
+particular provenance pass helps on Python. The relevant experiment is paired:
+run proximity-only and local-flow variants on the identical locked artifacts.
+
+Version 0.5 therefore rejects comparisons when sample IDs or immutable
+label/split/group/period metadata differ. It chooses a separate validation
+threshold for each variant at the same target FPR, freezes both thresholds, and
+resamples identical test groups together. The report exposes detections gained
+or lost and false alerts fixed or introduced at row and group level.
+
+A point gain is not a claim. The conservative gate requires a positive lower
+confidence bound for recall delta, a non-positive upper bound for FPR delta,
+and enough independent benign groups for both systems' one-sided target-FPR
+bounds. A 95% joint gate uses 97.5% per-system bounds via a two-system
+Bonferroni correction. The bundled paired files are synthetic mechanics tests.
 
 ## 3. Research hypothesis
 
@@ -340,7 +361,7 @@ round-trip; it says nothing about generalization.
 
 ### Test state
 
-Sixty-nine automated tests currently pass: 63 Python tests and six browser
+Seventy-six automated tests currently pass: 70 Python tests and six browser
 engine tests. They cover extraction ordering, alias resolution, non-execution,
 syntax errors, deterministic tokens, symlinks and size limits, local-provenance
 counterexamples and gating, sparse learning/serialization, µMal training/loading,
@@ -366,7 +387,7 @@ until all corresponding gates pass.
 
 ### Phase A — Python research baseline
 
-- Metadata-only manifest audit and locked-prediction evaluation: implemented.
+- Metadata audit, locked evaluation, and paired comparison: implemented.
 - Name-independent bounded local value flow and candidate gate: implemented.
 - Add bounded function summaries without whole-program graph construction.
 - Build a safe manifest-to-MalIR dataset worker outside the Codespace.

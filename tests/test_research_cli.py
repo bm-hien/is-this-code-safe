@@ -56,3 +56,23 @@ def test_evaluate_predictions_cli_json(capsys):
     assert report["selection"]["selected_on"] == "validation"
     assert report["fpr_evidence"]["minimum_benign_if_zero_fp"] == 2995
     assert not report["fpr_evidence"]["target_supported"]
+
+
+def test_compare_prediction_examples_cli_json(capsys):
+    code = main(
+        [
+            "compare-predictions",
+            str(EXAMPLES / "research_predictions.jsonl"),
+            str(EXAMPLES / "research_predictions_candidate.jsonl"),
+            "--bootstrap",
+            "20",
+            "--seed",
+            "11",
+            "--json",
+        ]
+    )
+    report = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert report["schema"] == "itcs.paired-comparison.v1"
+    assert report["effects"]["recall"]["delta"] == 0.5
+    assert report["claim_gate"]["status"] == "underpowered-target-fpr"

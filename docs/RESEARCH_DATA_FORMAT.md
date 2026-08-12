@@ -149,6 +149,31 @@ one-sided 95% upper bound is `1 - 0.05 ** (1 / n)`. A target of 0.1% needs at
 least 2,995 groups even with no false alert. The report also shows row-level
 FPR, but the claim gate uses the conservative group bound.
 
+## Paired comparison
+
+~~~bash
+itcs compare-predictions baseline.jsonl candidate.jsonl \
+  --target-fpr 0.001 --bootstrap 2000 --seed 0 --json
+~~~
+
+The two files must contain exactly the same `sample_id` set. For every ID,
+`label`, `split`, `group_id`, and `period` must agree; score, model invocation,
+and latency may differ. A `group_id` cannot cross a label or split. These
+checks make a silent corpus change fail instead of appearing as a model gain.
+
+Each system receives its own validation-selected threshold at the same target
+FPR. Both thresholds are frozen before test metrics. Test groups are then
+resampled together, preserving within-group rows and the baseline/candidate
+pair. The report includes deltas for recall, FPR, AP, Brier, AURC, paired
+compute fields, and row/group alert transitions.
+
+The conservative primary claim gate requires all three conditions: the lower
+paired confidence bound for recall improvement is above zero; the upper bound
+for FPR change is at most zero; and the one-sided target-FPR confidence-bound
+gate is supported for both systems. Otherwise the report says
+`not-supported`, `underpowered-target-fpr`, or `not-assessed`. A point estimate
+alone never opens the gate.
+
 ## Reproducibility boundary
 
 The format records predictions rather than loading model checkpoints during

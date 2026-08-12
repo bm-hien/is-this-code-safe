@@ -19,6 +19,15 @@ def test_suspicious_fixture_has_evidence():
     assert any(item.motif for item in report.evidence)
 
 
+def test_inert_hard_negatives_are_not_upgraded_by_local_flow():
+    for path in sorted((FIXTURES / "hard_negative").glob("*.py")):
+        local_flow = Scanner(enable_dataflow=True).scan(path)
+        proximity_only = Scanner(enable_dataflow=False).scan(path)
+        assert local_flow.risk_score < 25
+        assert local_flow.risk_score == proximity_only.risk_score
+        assert not any(item.evidence_kind == "dataflow" for item in local_flow.evidence)
+
+
 def test_scanner_skips_symlink(tmp_path):
     target = tmp_path / "target.py"
     target.write_text("print('not executed')", encoding="utf-8")

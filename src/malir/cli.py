@@ -9,6 +9,7 @@ from pathlib import Path
 
 from . import __version__
 from .benchmark import benchmark_dataflow_ablation, benchmark_scan
+from .comparison import paired_comparison_report
 from .data import load_examples
 from .evaluation import evaluation_report, load_predictions
 from .manifest import audit_manifest_path
@@ -30,6 +31,7 @@ COMMANDS = {
     "benchmark",
     "audit-manifest",
     "evaluate-predictions",
+    "compare-predictions",
 }
 
 ASSESSMENTS = {
@@ -131,6 +133,17 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--bootstrap", type=int, default=2_000)
     evaluate.add_argument("--seed", type=int, default=0)
     evaluate.add_argument("--json", action="store_true", dest="as_json")
+
+    compare = commands.add_parser(
+        "compare-predictions",
+        help="paired comparison on aligned prediction rows",
+    )
+    compare.add_argument("baseline", help="baseline prediction JSONL")
+    compare.add_argument("candidate", help="candidate prediction JSONL")
+    compare.add_argument("--target-fpr", type=float, default=0.001)
+    compare.add_argument("--bootstrap", type=int, default=2_000)
+    compare.add_argument("--seed", type=int, default=0)
+    compare.add_argument("--json", action="store_true", dest="as_json")
     return parser
 
 
@@ -155,6 +168,8 @@ def main(argv: list[str] | None = None) -> int:
             return _audit_manifest(args)
         if args.command == "evaluate-predictions":
             return _evaluate_predictions(args)
+        if args.command == "compare-predictions":
+            return _compare_predictions(args)
     except (OSError, ValueError, RuntimeError) as error:
         parser.error(str(error))
     return 1
@@ -205,6 +220,39 @@ def _evaluate_predictions(args: argparse.Namespace) -> int:
             f"AP {test['average_precision']:.3f} | "
             f"AURC {report['selective']['decision_margin']['aurc']:.3f} | "
             f"bootstrap groups {report['bootstrap']['successful']}"
+        )
+    return 0
+
+
+def _compare_predictions(args: argparse.Namespace) -> int:
+    report = paired_comparison_report(
+        load_predictions(args.baseline),
+        load_predictions(args.candidate),
+        target_fpr=args.target_fpr,
+        bootstrap=args.bootstrap,
+        seed=args.seed,
+    )
+    if args.as_json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        recall = report["effects"]["recall"]
+        false_positive_rate = report["effects"]["false_positive_rate"]
+        gate = report["claim_gate"]
+        print(
+            f"paired {report['alignment']['test_rows']} test rows / "
+            f"{report['alignment']['test_groups']} groups | {gate['status']}"
+        )
+        print(
+            f"recall {recall['baseline']:.3f} → {recall['candidate']:.3f} "
+            f"(Δ {recall['delta']:+.3f}) | "
+            f"FPR {false_positive_rate['baseline']:.6f} → "
+            f"{false_positive_rate['candidate']:.6f} "
+            f"(Δ {false_positive_rate['delta']:+.6f})"
+        )
+        bootstrap = report["bootstrap"]
+        print(
+            f"paired group bootstrap {bootstrap['successful']}/"
+            f"{bootstrap['repetitions']} usable replicates"
         )
     return 0
 

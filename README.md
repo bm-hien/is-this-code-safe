@@ -61,6 +61,8 @@ compute, and a tiny domain language model trained from scratch.
   campaign, time, and post-MalIR representation leakage.
 - Evaluates locked predictions with validation-only thresholds, low-FPR power
   bounds, group bootstrap, calibration, and tie-aware risk-coverage/AURC.
+- Compares aligned baselines with independently locked thresholds, paired
+  group bootstrap, transition counts, and a conservative claim gate.
 - Provides training, lint, tests, and reproducible CPU benchmarks.
 
 ## Quick start
@@ -138,6 +140,7 @@ itcs train-micro DATASET -o CHECKPOINT
 itcs benchmark PATH [--repeats N] [--no-dataflow | --compare-dataflow]
 itcs audit-manifest MANIFEST [--strict] [--json]
 itcs evaluate-predictions PREDICTIONS [--target-fpr RATE] [--json]
+itcs compare-predictions BASELINE CANDIDATE [--target-fpr RATE] [--json]
 ~~~
 
 Use --fail-on review, suspicious, or high-risk to make scan return exit code 2
@@ -165,7 +168,17 @@ archive. The bundled research manifest and predictions are synthetic examples:
   --strict --json
 .venv/bin/itcs evaluate-predictions examples/research_predictions.jsonl \
   --target-fpr 0.001 --bootstrap 2000 --seed 0 --json
+.venv/bin/itcs compare-predictions \
+  examples/research_predictions.jsonl \
+  examples/research_predictions_candidate.jsonl \
+  --target-fpr 0.001 --bootstrap 2000 --seed 0 --json
 ~~~
+
+Both prediction files are synthetic mechanics fixtures. The paired command
+requires identical sample IDs and label/split/group/period metadata, rejects
+group leakage across splits, selects each system's threshold independently on
+validation, and resamples the same test groups for both systems. Its joint
+95% FPR gate uses Bonferroni-adjusted 97.5% per-system bounds.
 
 The evaluator chooses a threshold on validation and applies it unchanged to
 test. It reports calibration and confidence-ranking metrics separately. Even
@@ -194,8 +207,9 @@ were taken on 2026-08-12.
 
 The corpus benchmark uses repeated inert templates (95% ordinary and 5%
 suspicious-shaped source). These numbers measure cost, not detection quality.
-Export predictions on a project-disjoint, time-split real dataset, audit the
-manifest, and use `itcs evaluate-predictions` before making efficacy claims.
+Export aligned predictions on a project-disjoint, time-split real dataset,
+audit the manifest, evaluate each system, and use `itcs compare-predictions`
+before making comparative efficacy claims.
 
 ~~~bash
 .venv/bin/python scripts/benchmark_corpus.py --files 1000 \
@@ -236,6 +250,7 @@ are not calibrated probabilities and none is whole-program proof.
 - src/malir/microlm.py: tiny Transformer and training loop.
 - src/malir/manifest.py: metadata audit and representation leakage checks.
 - src/malir/evaluation.py: low-FPR, calibration, AURC, and group bootstrap.
+- src/malir/comparison.py: aligned effects, paired group bootstrap, and claim gate.
 - web/: dependency-free GitHub Pages analyzer and embedded µMal Nano weights.
 - scripts/train_web_model.py: reproducible CPU trainer/exporter for µMal Nano.
 - docs/MALIR_SPEC.md: IR contract and versioning.
@@ -245,7 +260,7 @@ are not calibrated probabilities and none is whole-program proof.
 
 ## Known limits
 
-Version 0.4 performs bounded intraprocedural value provenance, not full
+Version 0.5 performs bounded intraprocedural value provenance, not full
 interprocedural or whole-program data-flow analysis. It does not yet summarize
 function calls, track object attributes or mutation precisely, unpack archives,
 inspect native extensions, deobfuscate arbitrary strings, or observe

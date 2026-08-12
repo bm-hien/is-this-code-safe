@@ -18,7 +18,7 @@ must not trust:
 - model checkpoints from unknown parties;
 - archive metadata or symlinks.
 
-## Safety invariants in version 0.4
+## Safety invariants in version 0.5
 
 - Source is opened as bytes, bounded, decoded with replacement, and passed to
   ast.parse.
@@ -43,7 +43,9 @@ must not trust:
   token, content, path, archive-path, and other payload-bearing fields.
 - Prediction evaluation reads bounded numeric/metadata rows, rejects duplicate
   IDs and non-finite scores, and never loads a checkpoint or sample.
-- Tests never import files under tests/fixtures/suspicious.
+- Paired comparison requires aligned sample metadata and resamples only
+  prediction rows; it does not resolve paths or inspect sample content.
+- Tests never import suspicious or hard-negative files under tests/fixtures.
 
 ## Explicit non-goals
 
