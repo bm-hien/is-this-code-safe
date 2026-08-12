@@ -18,7 +18,7 @@ must not trust:
 - model checkpoints from unknown parties;
 - archive metadata or symlinks.
 
-## Safety invariants in version 0.1
+## Safety invariants in version 0.2
 
 - Source is opened as bytes, bounded, decoded with replacement, and passed to
   ast.parse.
@@ -33,6 +33,10 @@ must not trust:
 - Sparse checkpoints are data-only JSON with a schema check.
 - µMal loading uses torch.load with weights_only=True, but checkpoints should
   still come from a trusted source.
+- Research manifest audit reads bounded metadata JSONL only and rejects source,
+  token, content, path, archive-path, and other payload-bearing fields.
+- Prediction evaluation reads bounded numeric/metadata rows, rejects duplicate
+  IDs and non-finite scores, and never loads a checkpoint or sample.
 - Tests never import files under tests/fixtures/suspicious.
 
 ## Explicit non-goals

@@ -26,7 +26,11 @@ signatures, reputation, sandboxing, or an analyst.
 | [MalGuard (2025)](https://arxiv.org/abs/2506.14466) | Reports competitive RF/XGBoost results from 132 static features | Strong cheap baselines are mandatory | Temporal degradation and open-world generalization |
 | [MOLOT (2026)](https://arxiv.org/abs/2606.07792) | Interprocedural behavior sequences, BERT, and SHAP explanations | Representation and explanation can dominate latency | Remove full call-graph/SHAP cost from the common path |
 | [MalTotal (2026)](https://arxiv.org/abs/2608.03232) | LLM-assisted sensitive-API discovery plus hybrid semantic slicing across five languages | Selective semantic reduction can sharply cut token cost | It still uses an LLM-assisted pipeline; results need independent replication |
-| [OMCBench](https://github.com/False-Positive-Community/open-malicious-code-benchmark) | Open malicious-code benchmark for Python and JavaScript | A reproducible public starting point exists | It is small for deep learning and contains real malicious archives |
+| [PyGuard (2026)](https://arxiv.org/abs/2601.16463) | Mines behavior patterns from false positives/negatives and uses LLM semantic abstraction | Hard negatives and contextual boundaries directly attack alert fatigue | Behavior mining and LLM reasoning are already occupied novelty |
+| [PYPILINE (2026)](https://arxiv.org/abs/2606.19063) | Builds AST/API graphs and suspicious-API knowledge for an agent workflow | Package-level API context is useful | Its LLM/RAG/agent path is not the two-CPU, offline target |
+| [Leakage study (2024)](https://arxiv.org/abs/2410.19364) | Shows distinct malware samples can collapse to identical learned representations across temporal splits | Audit the representation seen by the model, not only artifact hashes | Published case studies are Android; ITCS must test the effect on MalIR |
+| [Aurora (2025)](https://arxiv.org/abs/2505.22843) | Evaluates confidence ranking with risk-coverage/AURC and reject stability under drift | Calibration alone cannot validate an uncertainty gate | Transfer the protocol from Android streams to package source |
+| [OMCBench](https://github.com/False-Positive-Community/open-malicious-code-benchmark) | Open malicious-code benchmark for Python and JavaScript | A reproducible public starting point exists | It is small for low-FPR claims and contains real malicious archives |
 
 Reported numbers from papers are not direct measurements of this repository.
 MOLOT reports that, on a two-core setting, its BERT inference is roughly
@@ -38,6 +42,31 @@ use different datasets and protocols and must not be compared as one leaderboard
 
 The key conclusion is uncomfortable but useful: behavior sequences are not the
 novelty. A larger Transformer is unlikely to be the breakthrough.
+
+### 2.1 Evidence update: leakage, abstention, and statistical power
+
+Three findings materially change the ITCS experiment design:
+
+1. A forward time split is necessary but not sufficient. The leakage study
+   found identical or nearly identical model representations across temporal
+   train/test splits. Because MalIR is deliberately lossy, ITCS now requires a
+   SHA-256 of the final model-visible representation and rejects any such hash
+   crossing splits. Artifact SHA, package group, family, and campaign checks
+   remain separate controls.
+2. A probability near 0.5 is not evidence that uncertainty ranks errors well.
+   Aurora shows calibration and selective ranking are distinct: tied scores can
+   be calibrated yet useless for rejection. ITCS therefore reports ECE/Brier
+   and tie-aware risk-coverage/AURC, plus future per-period gate usage.
+3. A tiny benign set cannot support a tiny FPR claim. With zero observed false
+   positives in n benign trials, the exact one-sided confidence bound is
+   `1 - 0.05 ** (1 / n)` at 95% confidence. Showing an upper bound at or below
+   0.1% therefore needs at least 2,995 independent benign packages even with
+   zero errors. OMCBench's construction section specifies only 200 benign
+   Python packages, so it is a pilot benchmark rather than low-FPR evidence.
+
+The repository implements these controls in `itcs audit-manifest` and
+`itcs evaluate-predictions`. Both operate on bounded metadata/prediction
+JSONL; neither opens or executes package content.
 
 ## 3. Research hypothesis
 
@@ -142,10 +171,13 @@ No real malware is bundled or downloaded by the current repository.
 
 ### 6.2 Leakage controls
 
-Deduplicate exact archives, normalized ASTs, and near-duplicate MalIR sequences
-before splitting. Group every version of one package, fork, campaign, and
-malware family in one split. Strip package-name/path tokens for the main
-experiment, then measure them only as an explicit leakage ablation.
+Deduplicate exact archives and normalized ASTs before splitting, then hash the
+exact MalIR/token representation consumed by each model and audit that hash
+again after splitting. Group every version of one package, fork, campaign, and
+malware family in one split. A time split does not waive these controls. Strip
+package-name/path tokens for the main experiment, then measure them only as an
+explicit leakage ablation. Freeze the audited manifest fingerprint in the
+experiment record before model fitting.
 
 Required evaluations:
 
@@ -199,7 +231,9 @@ Primary quality metrics:
 - false alerts per 10,000 benign packages;
 - package-level precision, recall, and F1;
 - Brier score and expected calibration error;
-- family/campaign and monthly recall with confidence intervals.
+- tie-aware risk-coverage curves and AURC for the uncertainty gate;
+- one-sided FPR confidence bounds and low-FPR sample-size sufficiency;
+- family/campaign and monthly recall with group-bootstrap confidence intervals.
 
 System metrics:
 
@@ -264,10 +298,10 @@ round-trip; it says nothing about generalization.
 
 ### Test state
 
-Twenty-one automated tests currently pass. They cover extraction ordering, alias
-resolution, non-execution, syntax errors, deterministic tokens, symlinks and
-size limits, sparse learning/serialization, µMal training/loading, CLI JSON,
-and benchmark output.
+Forty-five automated tests currently pass. They cover extraction ordering,
+alias resolution, non-execution, syntax errors, deterministic tokens, symlinks
+and size limits, sparse learning/serialization, µMal training/loading, manifest
+leakage, low-FPR power, selective metrics, CLI JSON, and benchmark output.
 
 ## 10. Claim gates
 
@@ -288,11 +322,12 @@ until all corresponding gates pass.
 
 ### Phase A — Python research baseline
 
+- Metadata-only manifest audit and locked-prediction evaluation: implemented.
 - Add name-independent local value flow and bounded function summaries.
 - Build a safe manifest-to-MalIR dataset worker outside the Codespace.
-- Run OMCBench and a large hard-negative corpus.
-- Calibrate thresholds and uncertainty gates on validation only.
-- Add RSS/CPU profiling and reproducible experiment manifests.
+- Run OMCBench as a pilot, then a statistically powered hard-negative corpus.
+- Calibrate thresholds on validation only and freeze the manifest fingerprint.
+- Add process RSS/CPU profiling to the reproducible experiment record.
 
 ### Phase B — model efficiency
 
@@ -301,7 +336,7 @@ until all corresponding gates pass.
 - Export static shapes and evaluate dynamic INT8 quantization using the
   [ONNX Runtime guidance](https://onnxruntime.ai/docs/performance/model-optimizations/quantization.html).
 - Measure whether masked-token pretraining helps with limited labels.
-- Add selective prediction: abstain when confidence/calibration is poor.
+- Validate abstention with risk-coverage/AURC and reject-rate drift, not ECE alone.
 
 ### Phase C — second language
 

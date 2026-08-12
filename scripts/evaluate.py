@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate a trained classifier on labeled MalIR JSONL."""
+"""Smoke-evaluate a checkpoint; use the locked-prediction CLI for claims."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from malir.data import load_examples
+from malir.evaluation import average_precision, classification_metrics
 from malir.model import OnlineLogisticModel
 
 
@@ -53,7 +54,7 @@ def main() -> int:
     p95_index = max(0, math.ceil(0.95 * len(ordered)) - 1)
     result.update(
         {
-            "schema": "malir.evaluation.v1",
+            "schema": "itcs.smoke-evaluation.v1",
             "model": model_type,
             "model_bytes": checkpoint.stat().st_size,
             "examples": len(labels),
@@ -65,52 +66,6 @@ def main() -> int:
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0
-
-
-def classification_metrics(
-    labels: list[int],
-    probabilities: list[float],
-    threshold: float,
-) -> dict[str, float | int]:
-    predictions = [int(value >= threshold) for value in probabilities]
-    tp = sum(prediction == label == 1 for prediction, label in zip(predictions, labels))
-    tn = sum(prediction == label == 0 for prediction, label in zip(predictions, labels))
-    fp = sum(
-        prediction == 1 and label == 0 for prediction, label in zip(predictions, labels)
-    )
-    fn = sum(
-        prediction == 0 and label == 1 for prediction, label in zip(predictions, labels)
-    )
-    precision = tp / max(1, tp + fp)
-    recall = tp / max(1, tp + fn)
-    return {
-        "true_positive": tp,
-        "true_negative": tn,
-        "false_positive": fp,
-        "false_negative": fn,
-        "precision": precision,
-        "recall": recall,
-        "f1": 2 * precision * recall / max(1e-12, precision + recall),
-        "false_positive_rate": fp / max(1, fp + tn),
-    }
-
-
-def average_precision(labels: list[int], probabilities: list[float]) -> float:
-    ranked = sorted(
-        zip(probabilities, labels),
-        key=lambda item: item[0],
-        reverse=True,
-    )
-    positives = sum(labels)
-    if positives == 0:
-        return 0.0
-    hits = 0
-    total = 0.0
-    for rank, (_, label) in enumerate(ranked, 1):
-        if label:
-            hits += 1
-            total += hits / rank
-    return total / positives
 
 
 if __name__ == "__main__":
