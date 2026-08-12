@@ -572,12 +572,19 @@ def _request_bytes(
     data: bytes | None = None,
     headers: dict[str, str] | None = None,
 ) -> bytes:
+    origin = urllib.parse.urlsplit(url)
+    allowed_hosts = {"hugovk.dev", "pypi.org", "api.osv.dev"}
+    if origin.scheme != "https" or origin.hostname not in allowed_hosts:
+        raise ValueError("remote metadata URL is outside the host allowlist")
     request = urllib.request.Request(
         url, data=data, headers=headers or {"User-Agent": USER_AGENT}
     )
     for attempt in range(3):
         try:
             with urllib.request.urlopen(request, timeout=45) as response:
+                final = urllib.parse.urlsplit(response.geturl())
+                if final.scheme != "https" or final.hostname != origin.hostname:
+                    raise ValueError("remote metadata redirected outside its host")
                 declared = response.headers.get("Content-Length")
                 if declared is not None and int(declared) > limit:
                     raise ValueError("remote response exceeds byte limit")

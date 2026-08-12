@@ -8,6 +8,7 @@ from scripts.acquire_pypi_reference import (
     _artifact_preference,
     _osv_identifiers,
     _prepare_output,
+    _request_bytes,
     _select_artifact,
     _storage_name,
     _valid_file_metadata,
@@ -129,6 +130,11 @@ def test_prepare_output_rejects_symlink(tmp_path: Path):
 
     with pytest.raises(ValueError, match="symlink"):
         _prepare_output(link)
+
+
+def test_metadata_request_rejects_hosts_outside_allowlist():
+    with pytest.raises(ValueError, match="host allowlist"):
+        _request_bytes("https://example.test/metadata.json", 100)
 
 
 def test_prepare_output_rejects_unexpected_entries(tmp_path: Path):
