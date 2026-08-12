@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "is-this-code-safe"
+version = "0.1.0"
+description = "CPU-first, evidence-first malicious Python source analysis"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "ITCS contributors"}]
+keywords = ["malware-analysis", "static-analysis", "security", "python"]
+dependencies = []
+
+[project.optional-dependencies]
+micro = ["numpy>=1.26", "torch>=2.2"]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[project.urls]
+Homepage = "https://github.com/bm-hien/is-this-code-safe"
+Repository = "https://github.com/bm-hien/is-this-code-safe"
+Issues = "https://github.com/bm-hien/is-this-code-safe/issues"
+
+[project.scripts]
+itcs = "malir.cli:main"
+malir = "malir.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/fixtures/suspicious/*.py" = ["S102"]
