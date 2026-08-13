@@ -1,0 +1,35 @@
+name: Remote Desktop Commander
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  remote-desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Show runner info
+        run: |
+          echo "Runner: $RUNNER_NAME"
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Workspace: $GITHUB_WORKSPACE"
+          node --version
+          npm --version
+
+      - name: Start Desktop Commander Remote
+        working-directory: ${{ github.workspace }}
+        run: npx --yes @wonderwhy-er/desktop-commander@latest remote
