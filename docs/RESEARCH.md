@@ -370,6 +370,14 @@ code-learning literature such as
 [ContraCode](https://arxiv.org/abs/2009.02731) motivates consistency training,
 but every transform must be checked not to change the security behavior label.
 
+The bundled [µMal effect-context V2 checkpoint](MICRO_TRAINING_V2_2026-08-14.md)
+implements a mechanics-only version of this gate: 20 synthetic train groups,
+10 representation-disjoint synthetic validation groups, hard counterfactual
+roles, early stopping, label smoothing, and conservative validation-only
+temperature fitting. Seed 29 was selected by validation NLL from seeds 13, 29,
+and 47. This validation set is not a test set, and the result is not evidence
+for real-package efficacy or calibration.
+
 ## 8. Metrics
 
 Accuracy alone is unacceptable for imbalanced deployment.
@@ -464,7 +472,7 @@ Default configuration: vocabulary 4,096, maximum length 256, width 96, four
 attention heads, two encoder layers, FFN 192, 567,746 parameters. The benchmark
 uses two Torch threads, ten warmups, and 300 timed single-example predictions.
 
-- FP32 checkpoint: 2,280,513 bytes;
+- V2 FP32 checkpoint: 2,283,661 bytes;
 - median inference: 6.4882 ms;
 - p95 inference: 12.5015 ms;
 - optional PyTorch training environment: 992 MB on disk.
@@ -475,14 +483,19 @@ TransformerEncoder failed during inference. The supported FP32 path remains
 small and fast; INT8 work should target torchao or ONNX Runtime and must beat
 this measured baseline before inclusion.
 
-Training on the bundled 44 synthetic rows for 20 epochs reached 100% training
-accuracy. That is only a smoke test demonstrating learnability and checkpoint
-round-trip; it says nothing about generalization.
+The V2 checkpoint trains on 60 rows from 20 groups, selects its epoch and seed
+on 30 rows from 10 group- and representation-disjoint synthetic validation
+groups, and records NLL/Brier/ECE plus a conservative temperature. Seed 29
+reached 30/30 validation-row accuracy with NLL 0.074126 and temperature 1.0.
+This controlled validation result demonstrates the training gate and checkpoint
+round-trip only; it says nothing about real-package generalization or
+calibration. See
+[MICRO_TRAINING_V2_2026-08-14.md](MICRO_TRAINING_V2_2026-08-14.md).
 
 ### Test state
 
-One hundred ninety-eight automated tests currently pass: 178 Python tests and
-20 browser tests. They cover extraction ordering, alias resolution, non-execution,
+Two hundred two automated tests currently pass: 181 Python tests and
+21 browser tests. They cover extraction ordering, alias resolution, non-execution,
 syntax errors and warning isolation, deterministic tokens, symlinks and size
 limits, bounded hostile archives, source-set/normalized-AST grouping, local and
 direct-call provenance counterexamples and gating, semantic repeat saturation,

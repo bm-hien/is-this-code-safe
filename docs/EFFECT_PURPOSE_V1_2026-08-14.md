@@ -81,10 +81,16 @@ identifiers no longer become unrelated hashed vocabulary entries. Effect and
 purpose tokens are appended after normalized events and motifs. Repeated
 semantic events are compacted before bounded-window inference.
 
-The bundled checkpoint was retrained on 44 synthetic plumbing rows, including
-12 sanitized local-transformer hard negatives. Its checkpoint and browser
-manifest declare `feature_schema = malir.effect-context.v1` and
-`calibration = uncalibrated-demo`. Training accuracy is not a security claim.
+The bundled V2 checkpoint trains on 60 rows from 20 behavior groups and
+selects its epoch on 30 rows from 10 disjoint synthetic validation groups. The
+loader rejects group or exact model-visible representation leakage. The
+checkpoint and browser manifest declare
+`feature_schema = malir.effect-context.v2`,
+`calibration = temperature-scaled-validation`, and
+`validation_kind = synthetic-group-disjoint`. The fitted conservative
+temperature is 1.0. These mechanics and validation results are not a
+real-world security claim; see
+[MICRO_TRAINING_V2_2026-08-14.md](MICRO_TRAINING_V2_2026-08-14.md).
 
 ## Research basis and limits
 

@@ -33,7 +33,8 @@ web-model:
 	$(PYTHON) scripts/train_web_model.py
 
 web-model-train:
-	$(PYTHON) scripts/train_web_model.py --train --epochs 20 --batch-size 8 --threads 2
+	$(PYTHON) scripts/build_micro_dataset.py
+	$(PYTHON) scripts/train_web_model.py --train
 
 lint:
 	.venv/bin/ruff format --check src scripts tests

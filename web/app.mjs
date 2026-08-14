@@ -247,20 +247,28 @@ function renderReport(report) {
     const windows = model.windows === 1 ? "1 window" : model.windows + " windows";
     const coverage =
       model.tokensEvaluated + " semantic tokens · " + windows;
+    const calibration =
+      metadata.calibration === "temperature-scaled-validation"
+        ? "temperature-scaled on group-disjoint synthetic validation"
+        : "uncalibrated";
     elements.modelTitle.textContent = metadata.name + " consulted";
     if (model.used) {
       elements.modelCopy.textContent =
         metadata.parameters.toLocaleString() +
         " parameters · " +
         coverage +
-        " · uncalibrated advisory score can raise risk inside the uncertainty gate; the capability floor is never reduced";
+        " · " +
+        calibration +
+        "; advisory probability can raise risk inside the uncertainty gate; the capability floor is never reduced";
     } else {
       const boundary = model.gate === "below" ? "below 20" : "above 80";
       elements.modelCopy.textContent =
         metadata.parameters.toLocaleString() +
         " parameters · " +
         coverage +
-        " · uncalibrated score shown for audit; capability score " +
+        " · " +
+        calibration +
+        "; score shown for audit while capability score " +
         boundary +
         " keeps the deterministic score unchanged";
     }

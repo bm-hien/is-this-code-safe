@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from malir.data import load_examples
+from malir.data import load_training_dataset
 from malir.microlm import HashedTokenizer, MicroConfig, MicroMal, train_micro
 
 SMOKE_TOKENS = (
@@ -96,7 +96,11 @@ def _load_model(
     return model, config, dict(checkpoint.get("metadata", {}))
 
 
-def _smoke_vectors(model: MicroMal, config: MicroConfig) -> list[dict[str, Any]]:
+def _smoke_vectors(
+    model: MicroMal,
+    config: MicroConfig,
+    temperature: float,
+) -> list[dict[str, Any]]:
     tokenizer = HashedTokenizer(config)
     output = []
     with torch.inference_mode():
@@ -105,7 +109,7 @@ def _smoke_vectors(model: MicroMal, config: MicroConfig) -> list[dict[str, Any]]
             input_ids = torch.tensor([ids], dtype=torch.long)
             attention = torch.tensor([mask], dtype=torch.bool)
             logits, _ = model(input_ids, attention)
-            probability = float(torch.softmax(logits, dim=-1)[0, 1])
+            probability = float(torch.softmax(logits / temperature, dim=-1)[0, 1])
             output.append({"tokens": list(tokens), "probability": probability})
     return output
 
@@ -151,9 +155,22 @@ def export_checkpoint(
                 "feature_schema", "legacy-event-tokens"
             ),
             "training_examples": checkpoint_metadata.get("training_examples"),
+            "training_groups": checkpoint_metadata.get("training_groups"),
             "training_epochs": checkpoint_metadata.get("training_epochs"),
+            "training_epochs_completed": checkpoint_metadata.get(
+                "training_epochs_completed"
+            ),
             "training_accuracy": checkpoint_metadata.get("training_accuracy"),
+            "validation_examples": checkpoint_metadata.get("validation_examples"),
+            "validation_groups": checkpoint_metadata.get("validation_groups"),
+            "validation_metrics": checkpoint_metadata.get("validation_metrics"),
+            "temperature": checkpoint_metadata.get("temperature", 1.0),
             "calibration": checkpoint_metadata.get("calibration", "unknown"),
+            "validation_kind": checkpoint_metadata.get("validation_kind"),
+            "dataset_sha256": checkpoint_metadata.get("dataset_sha256"),
+            "split_fingerprint": checkpoint_metadata.get("split_fingerprint"),
+            "label_smoothing": checkpoint_metadata.get("label_smoothing"),
+            "seed": checkpoint_metadata.get("seed"),
         },
         "config": asdict(config),
         "binary": {
@@ -162,7 +179,11 @@ def export_checkpoint(
             "sha256": _sha256(binary_path),
         },
         "tensors": tensors,
-        "smoke_vectors": _smoke_vectors(model, config),
+        "smoke_vectors": _smoke_vectors(
+            model,
+            config,
+            float(checkpoint_metadata.get("temperature", 1.0)),
+        ),
     }
     encoded_manifest = json.dumps(
         manifest,
@@ -209,11 +230,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dataset",
         type=Path,
-        default=Path("examples/synthetic_train.jsonl"),
+        default=Path("examples/micro_train_v2.jsonl"),
     )
-    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--threads", type=int, default=2)
+    parser.add_argument("--seed", type=int, default=29)
+    parser.add_argument("--patience", type=int, default=12)
+    parser.add_argument("--minimum-epochs", type=int, default=12)
+    parser.add_argument("--learning-rate", type=float, default=1e-3)
+    parser.add_argument("--label-smoothing", type=float, default=0.05)
     return parser
 
 
@@ -221,14 +247,29 @@ def main() -> None:
     args = build_parser().parse_args()
     training = None
     if args.train:
-        examples = load_examples(args.dataset)
+        dataset = load_training_dataset(args.dataset)
         training = train_micro(
-            examples,
+            [example.as_pair() for example in dataset.train],
             args.checkpoint,
             config=MicroConfig(),
             epochs=args.epochs,
             batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            label_smoothing=args.label_smoothing,
             threads=args.threads,
+            seed=args.seed,
+            validation_examples=[example.as_pair() for example in dataset.validation],
+            patience=args.patience,
+            minimum_epochs=args.minimum_epochs,
+            checkpoint_metadata={
+                "dataset_sha256": dataset.dataset_sha256,
+                "split_fingerprint": dataset.split_fingerprint,
+                "training_groups": len({example.group_id for example in dataset.train}),
+                "validation_groups": len(
+                    {example.group_id for example in dataset.validation}
+                ),
+                "validation_kind": "synthetic-group-disjoint",
+            },
         )
     if not args.checkpoint.is_file():
         raise FileNotFoundError(

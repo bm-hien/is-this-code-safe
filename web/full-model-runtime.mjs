@@ -167,6 +167,10 @@ function validateManifest(manifest, buffer) {
   if (config.d_model % config.n_heads) {
     throw new Error("Model width must be divisible by its attention heads.");
   }
+  const temperature = Number(manifest.metadata?.temperature ?? 1);
+  if (!Number.isFinite(temperature) || temperature <= 0) {
+    throw new Error("Model calibration temperature is invalid.");
+  }
   for (const name of requiredTensorNames(config.n_layers)) {
     const descriptor = manifest.tensors[name];
     if (!descriptor) throw new Error("Model tensor is missing: " + name);
@@ -483,6 +487,9 @@ function runModel(identifiers) {
     2,
     config.d_model,
   )[0];
+  const temperature = Number(activeModel.manifest.metadata?.temperature ?? 1);
+  logits[0] /= temperature;
+  logits[1] /= temperature;
   const maximum = Math.max(logits[0], logits[1]);
   const clean = Math.exp(logits[0] - maximum);
   const suspicious = Math.exp(logits[1] - maximum);

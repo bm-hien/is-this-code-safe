@@ -130,7 +130,8 @@ the Python CLI. It is a local Transformer encoder, not a remote LLM call:
 | Hashed vocabulary | 4,096 |
 | Trainable parameters | 567,746 |
 | On-demand float32 binary | 2,270,984 bytes |
-| Training rows | 44 synthetic smoke examples |
+| Training split | 60 rows / 20 synthetic behavior groups |
+| Validation split | 30 rows / 10 disjoint synthetic behavior groups |
 
 The binary omits only the duplicate serialized language-model head because it
 is tied to the token embedding and is not used by browser classification.
@@ -153,9 +154,13 @@ gate its probability is advisory; the UI no longer calls this state “gated
 off.” JSON reports the gate state, window count, evaluated-token count, and
 whether input hit the window bound.
 
-The bundled 44-row corpus is designed only to test plumbing and hard-negative
-roles. The manifest declares `calibration = uncalibrated-demo`; training
-accuracy, semantic saturation, and windowing are not detection-accuracy claims.
+The V2 corpus is designed only to test group-disjoint training mechanics,
+effect-role hard negatives, and browser/PyTorch parity. The manifest declares
+`calibration = temperature-scaled-validation` and
+`validation_kind = synthetic-group-disjoint`; its fitted temperature is 1.0.
+The validation set was used for epoch/seed selection and is not a test set.
+These results, semantic saturation, and windowing are not detection-accuracy
+claims. See [MICRO_TRAINING_V2_2026-08-14.md](MICRO_TRAINING_V2_2026-08-14.md).
 Real claims require project/family-disjoint, time-aware evaluation under
 [EVALUATION_PROTOCOL.md](EVALUATION_PROTOCOL.md).
 

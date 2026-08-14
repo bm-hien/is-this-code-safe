@@ -7,9 +7,11 @@ when a micro-model checkpoint is explicitly requested.
 from __future__ import annotations
 
 import hashlib
+import math
 import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import torch
 from torch import Tensor, nn
@@ -83,11 +85,7 @@ class MicroMal(nn.Module):
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
         self.lm_head.weight = self.token_embedding.weight
 
-    def forward(
-        self,
-        input_ids: Tensor,
-        attention_mask: Tensor,
-    ) -> tuple[Tensor, Tensor]:
+    def encode(self, input_ids: Tensor, attention_mask: Tensor) -> Tensor:
         positions = torch.arange(
             input_ids.shape[1],
             device=input_ids.device,
@@ -97,10 +95,20 @@ class MicroMal(nn.Module):
             hidden,
             src_key_padding_mask=~attention_mask.bool(),
         )
-        hidden = self.norm(hidden)
+        return self.norm(hidden)
+
+    def forward(
+        self,
+        input_ids: Tensor,
+        attention_mask: Tensor,
+        *,
+        return_token_logits: bool = False,
+    ) -> tuple[Tensor, Tensor | None]:
+        hidden = self.encode(input_ids, attention_mask)
         weights = attention_mask.unsqueeze(-1).to(hidden.dtype)
         pooled = (hidden * weights).sum(dim=1) / weights.sum(dim=1).clamp_min(1.0)
-        return self.classifier(pooled), self.lm_head(hidden)
+        token_logits = self.lm_head(hidden) if return_token_logits else None
+        return self.classifier(pooled), token_logits
 
 
 class HashedTokenizer:
@@ -148,9 +156,12 @@ class HashedTokenizer:
 
 
 class MicroMalPredictor:
-    def __init__(self, model: MicroMal) -> None:
+    def __init__(self, model: MicroMal, *, temperature: float = 1.0) -> None:
+        if not math.isfinite(temperature) or temperature <= 0.0:
+            raise ValueError("temperature must be finite and positive")
         self.model = model.eval()
         self.tokenizer = HashedTokenizer(model.config)
+        self.temperature = float(temperature)
 
     @classmethod
     def load(
@@ -169,7 +180,9 @@ class MicroMalPredictor:
         config = MicroConfig(**checkpoint["config"])
         model = MicroMal(config)
         model.load_state_dict(checkpoint["state_dict"])
-        return cls(model)
+        metadata = checkpoint.get("metadata", {})
+        temperature = float(metadata.get("temperature", 1.0))
+        return cls(model, temperature=temperature)
 
     def predict_proba(self, tokens: list[str]) -> float:
         windows = self.tokenizer.encode_windows(tokens)
@@ -177,7 +190,8 @@ class MicroMalPredictor:
         attention = torch.tensor([mask for _, mask in windows], dtype=torch.bool)
         with torch.inference_mode():
             logits, _ = self.model(input_ids, attention)
-            return float(torch.softmax(logits, dim=-1)[:, 1].max())
+            calibrated = logits / self.temperature
+            return float(torch.softmax(calibrated, dim=-1)[:, 1].max())
 
     @property
     def parameter_count(self) -> int:
@@ -188,46 +202,78 @@ def train_micro(
     examples: list[tuple[list[str], int]],
     output_path: str | Path,
     config: MicroConfig | None = None,
-    epochs: int = 5,
+    epochs: int = 40,
     batch_size: int = 16,
     learning_rate: float = 1e-3,
     mlm_weight: float = 0.05,
+    label_smoothing: float = 0.05,
     threads: int = 2,
     seed: int = 13,
-) -> dict[str, float | int]:
+    *,
+    validation_examples: list[tuple[list[str], int]] | None = None,
+    patience: int = 8,
+    minimum_epochs: int = 5,
+    checkpoint_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     config = config or MicroConfig()
+    if not examples:
+        raise ValueError("training set is empty")
     if epochs < 1 or batch_size < 1:
         raise ValueError("epochs and batch_size must be positive")
     if not 0.0 <= mlm_weight <= 1.0:
         raise ValueError("mlm_weight must be between 0 and 1")
+    if not 0.0 <= label_smoothing < 1.0:
+        raise ValueError("label_smoothing must be in [0, 1)")
+    if patience < 1 or minimum_epochs < 1:
+        raise ValueError("patience and minimum_epochs must be positive")
+    _require_binary_labels(examples, "training")
+    if validation_examples is not None:
+        _require_binary_labels(validation_examples, "validation")
+
     torch.set_num_threads(max(1, threads))
     torch.manual_seed(seed)
     random.seed(seed)
     model = MicroMal(config)
     tokenizer = HashedTokenizer(config)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-    class_loss = nn.CrossEntropyLoss()
+    class_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
     language_loss = nn.CrossEntropyLoss(ignore_index=-100)
     prepared = [(*tokenizer.encode(tokens), label) for tokens, label in examples]
+    validation_prepared = (
+        [(*tokenizer.encode(tokens), label) for tokens, label in validation_examples]
+        if validation_examples is not None
+        else None
+    )
     indices = list(range(len(prepared)))
     last_loss = 0.0
-    model.train()
-    for _ in range(epochs):
+    best_epoch = 0
+    best_validation_nll = math.inf
+    best_state: dict[str, Tensor] | None = None
+    stale_epochs = 0
+
+    for epoch in range(1, epochs + 1):
+        model.train()
         random.shuffle(indices)
         epoch_loss = 0.0
         batches = 0
         for start in range(0, len(indices), batch_size):
             batch = [prepared[index] for index in indices[start : start + batch_size]]
-            ids = torch.tensor([item[0] for item in batch], dtype=torch.long)
-            mask = torch.tensor([item[1] for item in batch], dtype=torch.bool)
-            labels = torch.tensor([item[2] for item in batch], dtype=torch.long)
-            masked_ids, targets = _mask_tokens(ids, mask)
-            logits, token_logits = model(masked_ids, mask)
+            ids, mask, labels = _batch_tensors(batch)
+            logits, _ = model(ids, mask)
             loss = class_loss(logits, labels)
-            loss = loss + mlm_weight * language_loss(
-                token_logits.reshape(-1, config.vocab_size),
-                targets.reshape(-1),
-            )
+            if mlm_weight:
+                masked_ids, targets = _mask_tokens(ids, mask)
+                _, token_logits = model(
+                    masked_ids,
+                    mask,
+                    return_token_logits=True,
+                )
+                if token_logits is None:  # pragma: no cover - defensive invariant
+                    raise RuntimeError("masked-token logits are unavailable")
+                loss = loss + mlm_weight * language_loss(
+                    token_logits.reshape(-1, config.vocab_size),
+                    targets.reshape(-1),
+                )
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -235,35 +281,204 @@ def train_micro(
             epoch_loss += float(loss.detach())
             batches += 1
         last_loss = epoch_loss / max(1, batches)
+
+        if validation_prepared is None:
+            best_epoch = epoch
+            continue
+        validation_logits, validation_labels = _collect_logits(
+            model,
+            validation_prepared,
+            batch_size,
+        )
+        validation_nll = float(
+            nn.functional.cross_entropy(
+                validation_logits,
+                validation_labels,
+            )
+        )
+        if validation_nll < best_validation_nll - 1e-6:
+            best_validation_nll = validation_nll
+            best_epoch = epoch
+            best_state = {
+                name: value.detach().cpu().clone()
+                for name, value in model.state_dict().items()
+            }
+            stale_epochs = 0
+        else:
+            stale_epochs += 1
+        if epoch >= minimum_epochs and stale_epochs >= patience:
+            break
+
+    epochs_completed = epoch
+    if best_state is not None:
+        model.load_state_dict(best_state)
     model.eval()
-    correct = 0
-    with torch.inference_mode():
-        for start in range(0, len(prepared), batch_size):
-            batch = prepared[start : start + batch_size]
-            ids = torch.tensor([item[0] for item in batch], dtype=torch.long)
-            mask = torch.tensor([item[1] for item in batch], dtype=torch.bool)
-            labels = torch.tensor([item[2] for item in batch], dtype=torch.long)
-            logits, _ = model(ids, mask)
-            correct += int((logits.argmax(dim=-1) == labels).sum())
+    training_logits, training_labels = _collect_logits(
+        model,
+        prepared,
+        batch_size,
+    )
+    training_metrics = _classification_metrics(training_logits, training_labels)
+
+    temperature = 1.0
+    validation_metrics = None
+    validation_metrics_uncalibrated = None
+    if validation_prepared is not None:
+        validation_logits, validation_labels = _collect_logits(
+            model,
+            validation_prepared,
+            batch_size,
+        )
+        validation_metrics_uncalibrated = _classification_metrics(
+            validation_logits,
+            validation_labels,
+        )
+        temperature = _fit_conservative_temperature(
+            validation_logits,
+            validation_labels,
+        )
+        validation_metrics = _classification_metrics(
+            validation_logits,
+            validation_labels,
+            temperature=temperature,
+        )
+
+    metadata = dict(checkpoint_metadata or {})
+    metadata.update(
+        {
+            "feature_schema": "malir.effect-context.v2",
+            "training_examples": len(examples),
+            "validation_examples": len(validation_examples or ()),
+            "training_epochs": best_epoch or epochs_completed,
+            "training_epochs_completed": epochs_completed,
+            "training_accuracy": training_metrics["accuracy"],
+            "training_metrics": training_metrics,
+            "validation_metrics": validation_metrics,
+            "validation_metrics_uncalibrated": validation_metrics_uncalibrated,
+            "temperature": temperature,
+            "calibration": (
+                "temperature-scaled-validation"
+                if validation_examples is not None
+                else "uncalibrated-no-validation"
+            ),
+            "label_smoothing": label_smoothing,
+            "seed": seed,
+        }
+    )
     checkpoint = {
         "schema": "malir.micro-transformer.v1",
         "config": asdict(config),
         "state_dict": model.state_dict(),
-        "metadata": {
-            "feature_schema": "malir.effect-context.v1",
-            "training_examples": len(examples),
-            "training_epochs": epochs,
-            "training_accuracy": correct / len(prepared),
-            "calibration": "uncalibrated-demo",
-        },
+        "metadata": metadata,
     }
-    torch.save(checkpoint, output_path)
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(checkpoint, output)
     return {
         "examples": len(examples),
-        "epochs": epochs,
+        "validation_examples": len(validation_examples or ()),
+        "epochs_requested": epochs,
+        "epochs_completed": epochs_completed,
+        "best_epoch": best_epoch or epochs_completed,
         "parameters": sum(p.numel() for p in model.parameters()),
         "final_loss": last_loss,
-        "training_accuracy": correct / len(prepared),
+        "training_metrics": training_metrics,
+        "validation_metrics": validation_metrics,
+        "validation_metrics_uncalibrated": validation_metrics_uncalibrated,
+        "temperature": temperature,
+        "early_stopped": epochs_completed < epochs,
+    }
+
+
+def _require_binary_labels(
+    examples: list[tuple[list[str], int]],
+    split_name: str,
+) -> None:
+    labels = {label for _, label in examples}
+    if labels != {0, 1}:
+        raise ValueError(f"{split_name} examples must contain both label classes")
+
+
+def _batch_tensors(
+    batch: list[tuple[list[int], list[int], int]],
+) -> tuple[Tensor, Tensor, Tensor]:
+    ids = torch.tensor([item[0] for item in batch], dtype=torch.long)
+    mask = torch.tensor([item[1] for item in batch], dtype=torch.bool)
+    labels = torch.tensor([item[2] for item in batch], dtype=torch.long)
+    return ids, mask, labels
+
+
+def _collect_logits(
+    model: MicroMal,
+    prepared: list[tuple[list[int], list[int], int]],
+    batch_size: int,
+) -> tuple[Tensor, Tensor]:
+    logits_parts = []
+    label_parts = []
+    model.eval()
+    with torch.inference_mode():
+        for start in range(0, len(prepared), batch_size):
+            ids, mask, labels = _batch_tensors(prepared[start : start + batch_size])
+            logits, _ = model(ids, mask)
+            logits_parts.append(logits.detach().cpu())
+            label_parts.append(labels)
+    return torch.cat(logits_parts), torch.cat(label_parts)
+
+
+def _fit_conservative_temperature(logits: Tensor, labels: Tensor) -> float:
+    """Fit a validation-only scalar that never sharpens confidence."""
+
+    temperatures = torch.exp(torch.linspace(0.0, math.log(20.0), steps=241))
+    scaled = logits.unsqueeze(0) / temperatures[:, None, None]
+    log_probabilities = torch.log_softmax(scaled, dim=-1)
+    row_indices = torch.arange(labels.shape[0])
+    losses = -log_probabilities[:, row_indices, labels].mean(dim=1)
+    best = int(losses.argmin())
+    return float(temperatures[best])
+
+
+def _classification_metrics(
+    logits: Tensor,
+    labels: Tensor,
+    *,
+    temperature: float = 1.0,
+    bins: int = 10,
+) -> dict[str, float]:
+    probabilities = torch.softmax(logits / temperature, dim=-1)[:, 1]
+    predictions = (probabilities >= 0.5).long()
+    accuracy = float((predictions == labels).float().mean())
+    recalls = []
+    for label in (0, 1):
+        selected = labels == label
+        recalls.append(float((predictions[selected] == label).float().mean()))
+    clipped = probabilities.clamp(1e-7, 1.0 - 1e-7)
+    targets = labels.to(torch.float32)
+    nll = float(
+        -(
+            targets * torch.log(clipped) + (1.0 - targets) * torch.log(1.0 - clipped)
+        ).mean()
+    )
+    brier = float(((probabilities - targets) ** 2).mean())
+    confidence = torch.where(predictions == 1, probabilities, 1.0 - probabilities)
+    correct = (predictions == labels).to(torch.float32)
+    ece = 0.0
+    boundaries = torch.linspace(0.0, 1.0, bins + 1)
+    for index in range(bins):
+        lower = boundaries[index]
+        upper = boundaries[index + 1]
+        selected = (confidence > lower) & (confidence <= upper)
+        if selected.any():
+            weight = float(selected.float().mean())
+            gap = abs(
+                float(confidence[selected].mean()) - float(correct[selected].mean())
+            )
+            ece += weight * gap
+    return {
+        "accuracy": accuracy,
+        "balanced_accuracy": sum(recalls) / 2.0,
+        "nll": nll,
+        "brier_score": brier,
+        "ece_10": ece,
     }
 
 

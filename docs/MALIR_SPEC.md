@@ -146,9 +146,12 @@ mutation, generator iteration, async scheduling beyond immediate `await`,
 dynamic dispatch, decorators, exceptions, or other modules. Every path keeps
 its supporting real event indexes for review; the internal call-boundary marker
 is never serialized. Path tokens remain `MOTIF:<name>` regardless of evidence
-kind. Effect context changes the model-visible sequence, so compatible
-checkpoints declare `feature_schema = malir.effect-context.v1` and must be
-retrained and re-exported.
+kind. Effect context changes the model-visible sequence. The current checkpoint
+declares `feature_schema = malir.effect-context.v2`; V2 adds a leakage-audited
+group-disjoint training contract and validation metadata without changing the
+event vocabulary. Older V1 checkpoints remain loadable but do not carry those
+training guarantees. See
+[MICRO_TRAINING_V2_2026-08-14.md](MICRO_TRAINING_V2_2026-08-14.md).
 
 See [the bounded-summary design note](BOUNDED_CALL_SUMMARIES.md) for its
 research basis, conservative cases, and regression matrix.

@@ -62,10 +62,23 @@ test("full browser artifact matches the checkpoint architecture", () => {
   assert.equal(FULL_MODEL_MANIFEST.metadata.parameters, 567_746);
   assert.equal(
     FULL_MODEL_MANIFEST.metadata.feature_schema,
-    "malir.effect-context.v1",
+    "malir.effect-context.v2",
   );
-  assert.equal(FULL_MODEL_MANIFEST.metadata.training_examples, 44);
-  assert.equal(FULL_MODEL_MANIFEST.metadata.calibration, "uncalibrated-demo");
+  assert.equal(FULL_MODEL_MANIFEST.metadata.training_examples, 60);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.training_groups, 20);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.validation_examples, 30);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.validation_groups, 10);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.seed, 29);
+  assert.ok(FULL_MODEL_MANIFEST.metadata.validation_metrics.nll < 0.08);
+  assert.equal(
+    FULL_MODEL_MANIFEST.metadata.calibration,
+    "temperature-scaled-validation",
+  );
+  assert.ok(FULL_MODEL_MANIFEST.metadata.temperature >= 1);
+  assert.equal(
+    FULL_MODEL_MANIFEST.metadata.validation_kind,
+    "synthetic-group-disjoint",
+  );
   assert.equal(FULL_MODEL_MANIFEST.config.n_layers, 2);
   assert.equal(FULL_MODEL_MANIFEST.config.n_heads, 4);
   assert.equal(FULL_MODEL_MANIFEST.config.d_model, 96);
@@ -320,4 +333,33 @@ test("write payload text is not interpreted as a persistence path", () => {
     report.events.some((event) => event.op === "PERSISTENCE_WRITE"),
     false,
   );
+});
+
+
+test("effect context separates backup transfer from download execution", () => {
+  const backup = predictMicro([
+    "FILE",
+    "P:runtime|C:source|O:FILE_READ|T:file",
+    "P:runtime|C:transform|O:ENCODE|T:generic",
+    "P:runtime|C:sink|O:NETWORK_SEND|T:network",
+    "EFFECT:ENTRY:library_callable",
+    "EFFECT:ORIGIN:local_file",
+    "EFFECT:DESTINATION:network",
+    "EFFECT:TRANSFORM:encoding",
+  ]);
+  const remoteExecution = predictMicro([
+    "FILE",
+    "P:runtime|C:source|O:NETWORK_RECEIVE|T:network",
+    "P:runtime|C:sink|O:PROCESS_EXEC|T:generic",
+    "MOTIF:download_execute",
+    "EFFECT:ENTRY:library_callable",
+    "EFFECT:ORIGIN:network",
+    "EFFECT:DESTINATION:process",
+    "EFFECT:FLOW:network_to_execution",
+    "PURPOSE:remote_code_executor",
+  ]);
+
+  assert.ok(backup < 0.1);
+  assert.ok(remoteExecution > 0.9);
+  assert.ok(remoteExecution - backup > 0.8);
 });

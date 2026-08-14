@@ -347,6 +347,14 @@ Accuracy/F1 đơn lẻ không đủ cho môi trường mất cân bằng.
 
 Nếu chưa đạt các cổng này, mô tả đúng là “prototype nghiên cứu CPU-first”.
 
+Checkpoint [µMal effect-context V2](MICRO_TRAINING_V2_2026-08-14.md) hiện dùng
+20 nhóm train tổng hợp và 10 nhóm validation tổng hợp tách theo group lẫn exact
+model-visible representation. Pipeline có hard counterfactual roles, early
+stopping, label smoothing và temperature fitting chỉ trên validation; seed 29
+được chọn theo validation NLL trong ba seed 13/29/47. Đây chỉ là gate cơ khí:
+validation đã dùng để chọn model nên không phải test, và chưa chứng minh chất
+lượng/calibration trên package thật.
+
 ## Việc nên làm tiếp theo
 
 `context-causal-v6` cùng staged-file provenance hiện đã vượt gate development

@@ -60,8 +60,9 @@ can make source triage cheaper, more auditable, and reusable across languages.
 
 See [MalIR v1](docs/MALIR_SPEC.md) for the language-neutral contract,
 [effect and purpose context](docs/EFFECT_PURPOSE_V1_2026-08-14.md) for the
-capability/purpose split, and [the research plan](docs/RESEARCH.md) for claim
-gates.
+capability/purpose split, [µMal V2 training](docs/MICRO_TRAINING_V2_2026-08-14.md)
+for the group-disjoint synthetic checkpoint procedure, and
+[the research plan](docs/RESEARCH.md) for claim gates.
 
 ## Current capabilities
 
@@ -84,7 +85,9 @@ gates.
   score; outside the gate its probability remains advisory.
 - Includes a dependency-free hashed online logistic classifier.
 - Includes full µMal: a 567,746-parameter behavior Transformer trained from
-  scratch with classification and masked-token objectives.
+  scratch with classification and masked-token objectives. The published V2
+  checkpoint uses 20 train groups, 10 disjoint synthetic validation groups,
+  early stopping, label smoothing, and validation-only temperature fitting.
 - Produces deterministic JSON reports with source evidence and explicit limits.
 
 ### Current Python frontend
@@ -135,8 +138,8 @@ For the optional full µMal environment:
 
 ~~~bash
 make bootstrap-micro
-.venv/bin/itcs train-micro examples/synthetic_train.jsonl \
-  -o artifacts/micro.pt --epochs 20 --batch-size 8 --threads 2
+.venv/bin/python scripts/build_micro_dataset.py
+.venv/bin/python scripts/train_web_model.py --train
 .venv/bin/itcs scan path/to/source \
   --micro-model artifacts/micro.pt --threads 2
 ~~~
@@ -149,9 +152,12 @@ For the much smaller dependency-free online model:
   --model artifacts/sparse.model.json
 ~~~
 
-The bundled 44-row dataset is deliberately synthetic and exists only for
-correctness and training-plumbing tests. Its training accuracy is not evidence
-of real-world detection quality.
+The published V2 corpus has 90 synthetic rows across 30 behavior groups:
+60 rows/20 groups for training and 30 rows/10 groups for validation. Exact
+model-visible representations and group IDs cannot cross the split. The older
+44-row file remains a compatibility fixture. Neither corpus is evidence of
+real-world detection quality; see the
+[V2 training note](docs/MICRO_TRAINING_V2_2026-08-14.md).
 
 ## Browser analyzer
 
@@ -241,8 +247,9 @@ and model transfer are measured.
 
 ### Phase 1 — harden the shared core and Python reference frontend
 
-- Semantic repeat saturation is implemented; package-level calibration against
-  observed hard negatives and locked holdouts remains pending.
+- Semantic repeat saturation and group-disjoint synthetic µMal V2 training are
+  implemented; package-level calibration against observed hard negatives and
+  locked holdouts remains pending.
 - Bounded direct-call summaries without whole-program graph construction:
   implemented; evaluation against locked corpora remains pending.
 - Build a provenance-rich, statistically powered evaluation corpus.
