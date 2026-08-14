@@ -249,6 +249,13 @@ def train_micro(
         "schema": "malir.micro-transformer.v1",
         "config": asdict(config),
         "state_dict": model.state_dict(),
+        "metadata": {
+            "feature_schema": "malir.effect-context.v1",
+            "training_examples": len(examples),
+            "training_epochs": epochs,
+            "training_accuracy": correct / len(prepared),
+            "calibration": "uncalibrated-demo",
+        },
     }
     torch.save(checkpoint, output_path)
     return {

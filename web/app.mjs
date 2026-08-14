@@ -28,6 +28,8 @@ const elements = Object.freeze({
   latency: document.querySelector("#latency"),
   modelTitle: document.querySelector("#model-title"),
   modelCopy: document.querySelector("#model-copy"),
+  purposeTitle: document.querySelector("#purpose-title"),
+  purposeCopy: document.querySelector("#purpose-copy"),
   evidenceList: document.querySelector("#evidence-list"),
   evidenceCount: document.querySelector("#evidence-count"),
   behaviorTokens: document.querySelector("#behavior-tokens"),
@@ -201,6 +203,27 @@ function setGauge(score) {
   elements.riskGauge.setAttribute("aria-valuenow", String(Math.round(normalized)));
 }
 
+function renderPurpose(effectSummary) {
+  const purpose = effectSummary.purposeCandidates[0];
+  if (!purpose) {
+    elements.purposeTitle.textContent = "Purpose not resolved";
+    elements.purposeCopy.textContent =
+      "Capabilities remain visible, but this frontend did not establish a program role.";
+    return;
+  }
+  const label = purpose.label.replaceAll("-", " ");
+  elements.purposeTitle.textContent =
+    label.charAt(0).toUpperCase() +
+    label.slice(1) +
+    " · " +
+    purpose.confidence +
+    " confidence";
+  const dualUse = purpose.label === "local-code-transformer"
+    ? " This is a dual-use role: execution capabilities still require review."
+    : " This is an effect-backed candidate, not a claim about author intent.";
+  elements.purposeCopy.textContent = purpose.reason + "." + dualUse;
+}
+
 function renderReport(report) {
   currentReport = report;
   const content = assessmentText[report.assessment];
@@ -230,23 +253,24 @@ function renderReport(report) {
         metadata.parameters.toLocaleString() +
         " parameters · " +
         coverage +
-        " · probability contributes 35% inside the uncertainty gate";
+        " · uncalibrated advisory score can raise risk inside the uncertainty gate; the capability floor is never reduced";
     } else {
       const boundary = model.gate === "below" ? "below 20" : "above 80";
       elements.modelCopy.textContent =
         metadata.parameters.toLocaleString() +
         " parameters · " +
         coverage +
-        " · probability shown for audit; rule score " +
+        " · uncalibrated score shown for audit; capability score " +
         boundary +
         " keeps the deterministic score unchanged";
     }
   } else {
     elements.modelTitle.textContent = "µMal Full not loaded";
     elements.modelCopy.textContent =
-      "Download the model to include an advisory probability.";
+      "Download the model to include an advisory model score.";
   }
 
+  renderPurpose(report.effectSummary);
   renderEvidence(report);
   renderTokens(report);
   renderWarnings(report);
@@ -263,6 +287,8 @@ function renderError(error) {
   elements.ruleScore.textContent = "—";
   elements.modelScore.textContent = "—";
   elements.latency.textContent = "—";
+  elements.purposeTitle.textContent = "Effect profile unavailable";
+  elements.purposeCopy.textContent = "Fix the input error and analyze again.";
   elements.verdictBadge.className = "verdict-badge neutral";
   elements.verdictBadge.textContent = "input error";
   setGauge(0);

@@ -1,3 +1,4 @@
+import { summarizeEffects } from "./effects.mjs";
 import {
   getFullModelStatus,
   installFullModel,
@@ -47,6 +48,7 @@ def update():
 
 const EVENT_WEIGHTS = Object.freeze({
   DYNAMIC_EXEC: 27,
+  CODE_COMPILE: 2,
   PROCESS_EXEC: 18,
   UNSAFE_DESERIALIZE: 17,
   NETWORK_SEND: 15,
@@ -69,12 +71,16 @@ const CALL_RULES = Object.freeze([
       "builtins.eval",
       "exec",
       "builtins.exec",
-      "compile",
-      "builtins.compile",
     ]),
     op: "DYNAMIC_EXEC",
     category: "sink",
     detail: "dynamic code execution",
+  },
+  {
+    names: new Set(["compile", "builtins.compile"]),
+    op: "CODE_COMPILE",
+    category: "transform",
+    detail: "runtime source compilation",
   },
   {
     names: new Set([
@@ -226,6 +232,10 @@ const SENSITIVE_MARKERS = Object.freeze([
   "history",
   "/etc/passwd",
   "/etc/shadow",
+]);
+
+const SENSITIVE_ENV_MARKERS = Object.freeze([
+  ...SENSITIVE_MARKERS,
   "token",
 ]);
 
@@ -307,14 +317,14 @@ function classifyCall(name, hasPayload) {
     };
   }
   if (
-    ["read", "read_text", "read_bytes"].includes(name) ||
-    /\.(read|read_text|read_bytes)$/.test(name)
+    ["read_text", "read_bytes"].includes(name) ||
+    /\.(read_text|read_bytes)$/.test(name)
   ) {
     return { op: "FILE_READ", category: "source", detail: "file read" };
   }
   if (
-    ["write", "write_text", "write_bytes"].includes(name) ||
-    /\.(write|write_text|write_bytes)$/.test(name)
+    ["write_text", "write_bytes"].includes(name) ||
+    /\.(write_text|write_bytes)$/.test(name)
   ) {
     return { op: "FILE_WRITE", category: "sink", detail: "file write" };
   }
@@ -411,14 +421,31 @@ function firstTarget(literals, fallback) {
   return (literals.find((value) => value.length > 0) || fallback).slice(0, 240);
 }
 
+function literalImportTarget(line, rawName, column) {
+  if (!["__import__", "builtins.__import__", "importlib.import_module"].includes(rawName)) {
+    return null;
+  }
+  const tail = line.slice(column + rawName.length);
+  const match = tail.match(
+    /^\s*\(\s*(?:[rRuUbBfF]{0,2})?(["'])([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\1/,
+  );
+  return match?.[2] || null;
+}
+
 function extractEvents(source, fileName) {
   const aliases = new Map();
   const functions = [];
   const events = [];
   const seen = new Set();
+  const seenImports = new Set();
   const lexState = { triple: null };
 
   const add = (pending, event) => {
+    if (event.op === "IMPORT") {
+      const importKey = [event.phase, event.function, event.target].join("|");
+      if (seenImports.has(importKey)) return;
+      seenImports.add(importKey);
+    }
     const key = [event.op, event.line, event.target, event.function].join("|");
     if (!seen.has(key)) {
       seen.add(key);
@@ -528,9 +555,7 @@ function extractEvents(source, fileName) {
 
       if (["open", "builtins.open", "io.open"].includes(name)) {
         const mode =
-          literals.find(
-            (value, index) => index > 0 && /^[rwaxtb+]+$/.test(value),
-          ) || "r";
+          literals.find((value) => /^[rwaxtb+]+$/.test(value)) || "r";
         const write = /[wax+]/.test(mode);
         classified = write
           ? { op: "FILE_WRITE", category: "sink", detail: "file write" }
@@ -538,11 +563,26 @@ function extractEvents(source, fileName) {
       } else {
         classified = classifyCall(name, hasPayload);
       }
+      if (classified?.op === "DYNAMIC_IMPORT") {
+        const literalModule = literalImportTarget(
+          line,
+          rawName,
+          match.index || 0,
+        );
+        if (literalModule) {
+          classified = {
+            op: "IMPORT",
+            category: "context",
+            detail: "literal module import",
+          };
+          target = literalModule;
+        }
+      }
       if (!classified) continue;
 
       if (
         classified.op === "FILE_WRITE" &&
-        ["write", "write_text", "write_bytes"].includes(name.split(".").at(-1))
+        ["write_text", "write_bytes"].includes(name.split(".").at(-1))
       ) {
         target = name;
       }
@@ -781,7 +821,9 @@ function modelTargetClass(event) {
   if (["SENSITIVE_FILE_READ", "PERSISTENCE_WRITE"].includes(event.op)) {
     return "sensitive";
   }
-  if (containsMarker(target, SENSITIVE_MARKERS)) return "sensitive";
+  if (event.op === "ENV_READ" && containsMarker(target, SENSITIVE_ENV_MARKERS)) {
+    return "sensitive";
+  }
   if (["FILE_READ", "FILE_WRITE", "FILE_DELETE"].includes(event.op)) {
     return "file";
   }
@@ -789,8 +831,8 @@ function modelTargetClass(event) {
   return "generic";
 }
 
-function canonicalTokens(events, motifs, fileName) {
-  const tokens = [`FILE:${fileName}`];
+function canonicalTokens(events, motifs, effectSummary, _fileName) {
+  const tokens = ["FILE"];
   const seen = new Set();
   for (const event of events) {
     const key = [
@@ -802,9 +844,7 @@ function canonicalTokens(events, motifs, fileName) {
     ].join(":");
     if (seen.has(key)) continue;
     seen.add(key);
-    const target = String(event.target || "unknown")
-      .toLowerCase()
-      .replaceAll(" ", "_");
+    const target = modelTargetClass(event);
     tokens.push(
       `P:${event.phase}|C:${event.category}|O:${event.op}|T:${target}`,
     );
@@ -814,6 +854,12 @@ function canonicalTokens(events, motifs, fileName) {
     if (seen.has(key)) continue;
     seen.add(key);
     tokens.push(`MOTIF:${motif.motif}`);
+  }
+  for (const token of effectSummary.tokens) {
+    const key = `effect:${token}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tokens.push(token);
   }
   return tokens;
 }
@@ -843,10 +889,16 @@ export function analyzeSource(source, fileName = "sample.py") {
 
   const events = extractEvents(source, fileName);
   const motifs = buildMotifs(events);
+  const effectSummary = summarizeEffects(source, events, motifs);
   const aggregation = aggregateEvidence(events, motifs, fileName);
   const { evidence, ruleScore, suppressedEvidenceCount } = aggregation;
   const modelStatus = getFullModelStatus();
-  const modelTokens = canonicalTokens(events, motifs, fileName);
+  const modelTokens = canonicalTokens(
+    events,
+    motifs,
+    effectSummary,
+    fileName,
+  );
   const modelConsulted = modelStatus.loaded;
   const modelResult = modelConsulted
     ? predictMicroDetails(modelTokens)
@@ -861,9 +913,10 @@ export function analyzeSource(source, fileName = "sample.py") {
       : ruleScore < 20
         ? "below"
         : "above";
-  const riskScore = modelUsed
+  const fusedScore = modelUsed
     ? 100 * (0.65 * (ruleScore / 100) + 0.35 * modelProbability)
     : ruleScore;
+  const riskScore = Math.max(ruleScore, fusedScore);
   const verdict = verdictFor(riskScore);
   const ended = globalThis.performance?.now?.() ?? Date.now();
 
@@ -873,6 +926,7 @@ export function analyzeSource(source, fileName = "sample.py") {
     assessment: assessmentFor(verdict),
     verdict,
     riskScore,
+    capabilityScore: ruleScore,
     ruleScore,
     bytes,
     elapsedMs: ended - started,
@@ -880,6 +934,7 @@ export function analyzeSource(source, fileName = "sample.py") {
     suppressedEvidenceCount,
     events,
     motifs,
+    effectSummary,
     modelTokens,
     model: {
       loaded: modelStatus.loaded,
@@ -892,7 +947,10 @@ export function analyzeSource(source, fileName = "sample.py") {
       truncated: modelResult?.truncated ?? false,
       suppressedTokens: Math.max(
         0,
-        events.length + motifs.length - (modelTokens.length - 1),
+        events.length +
+          motifs.length +
+          effectSummary.tokens.length -
+          (modelTokens.length - 1),
       ),
       metadata: modelStatus.metadata,
     },

@@ -63,9 +63,13 @@ uses a bounded lexical frontend that:
 2. extracts string values separately for sensitive and persistence paths;
 3. resolves common `import`, `from ... import`, and assignment aliases;
 4. emits the same operation names used by MalIR;
-5. builds conservative, same-function proximity motifs labeled
-   `proximity:low` and gives them only weak rule weight; and
-6. preserves line locations for every weighted signal.
+5. distinguishes compilation from execution, constant imports from truly
+   dynamic imports, and typed file APIs from unknown object methods;
+6. builds conservative, same-function proximity motifs labeled
+   `proximity:low` and gives them only weak rule weight;
+7. summarizes entrypoints, origins, destinations, transforms, flows, and
+   conservative purpose candidates; and
+8. preserves line locations for every weighted signal.
 
 MalIR-Lite intentionally does not claim full Python parsing. In particular,
 multi-line calls, unusual aliasing, generated code, advanced f-strings, and
@@ -92,14 +96,24 @@ is input canonicalization, not a claim that frequency never matters.
 The committed adversarial regression repeats the screenshot's outbound call
 while varying later URLs:
 
-| Outbound calls | Unique weighted signals | Rule score | Model tokens | Risk score |
+| Outbound calls | Unique weighted signals | Capability score | Model tokens | Risk score |
 |---:|---:|---:|---:|---:|
-| 1 | 4 | 28 | 6 | 53.02 |
-| 4 | 4 | 28 | 6 | 53.02 |
-| 20 | 4 | 28 | 6 | 53.02 |
+| 1 | 4 | 28 | 12 | 52.00 |
+| 4 | 4 | 28 | 12 | 52.00 |
+| 20 | 4 | 28 | 12 | 52.00 |
 
 This establishes repeat invariance for that transformation only; it is not an
 accuracy or false-positive-rate result.
+
+## Effect and purpose profile
+
+The result card separately shows deterministic capability and a conservative
+whole-file purpose candidate. A local input-to-generated-artifact pipeline with
+AST/compiler structure can be labeled `local-code-transformer`; network,
+process, persistence, or sensitive-data flows block that benign-role shortcut.
+The label explains observed effects and never proves author intent or safety.
+The detailed `ff.py` hard-negative analysis and limitations are recorded in
+[effect and purpose context v1](EFFECT_PURPOSE_V1_2026-08-14.md).
 
 ## Full µMal model
 
@@ -116,7 +130,7 @@ the Python CLI. It is a local Transformer encoder, not a remote LLM call:
 | Hashed vocabulary | 4,096 |
 | Trainable parameters | 567,746 |
 | On-demand float32 binary | 2,270,984 bytes |
-| Training rows | 32 synthetic smoke examples |
+| Training rows | 44 synthetic smoke examples |
 
 The binary omits only the duplicate serialized language-model head because it
 is tied to the token embedding and is not used by browser classification.
@@ -124,22 +138,26 @@ Inference tensors, classifier output, and token hashing otherwise match the
 checkpoint. Generated smoke vectors verify browser probabilities against
 PyTorch during JavaScript tests.
 
-The input is a sequence of full MalIR-style phase, category, operation, target,
-file, and motif tokens, not raw source. A 32-token overlap carries local context
-between windows, and the maximum bounded window probability is reported rather
-than adding probabilities as source size grows.
+The input is a sequence of normalized MalIR phase, category, operation,
+target-class, effect, purpose, and motif tokens, not raw source. A constant
+`FILE` boundary prevents filenames from becoming learned identifiers. A
+32-token overlap carries local context between windows, and the maximum bounded
+window probability is reported rather than adding probabilities as source size
+grows.
 
 After the checkpoint has been downloaded, every analysis consults µMal and
-shows its probability. Inside the 20–80 uncertainty gate, the final score is 65%
-evidence score and 35% model probability. Outside that gate, the probability is
-advisory and the deterministic score remains unchanged; the UI no longer calls
-this state “gated off.” JSON reports the gate state, window count, evaluated
-token count, and whether input hit the window bound.
+shows its probability. Inside the 20–80 gate, fusion is 65% capability and 35%
+model probability, followed by `risk = max(capability, fused)`. The model may
+raise an ambiguous decision but cannot lower concrete capability. Outside the
+gate its probability is advisory; the UI no longer calls this state “gated
+off.” JSON reports the gate state, window count, evaluated-token count, and
+whether input hit the window bound.
 
-The bundled corpus is designed only to test plumbing. Semantic saturation and
-windowing establish robustness invariants, not detection accuracy. Real claims
-require project/family-disjoint, time-aware evaluation under
-`docs/EVALUATION_PROTOCOL.md`.
+The bundled 44-row corpus is designed only to test plumbing and hard-negative
+roles. The manifest declares `calibration = uncalibrated-demo`; training
+accuracy, semantic saturation, and windowing are not detection-accuracy claims.
+Real claims require project/family-disjoint, time-aware evaluation under
+[EVALUATION_PROTOCOL.md](EVALUATION_PROTOCOL.md).
 
 Export the existing full checkpoint for the browser:
 

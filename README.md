@@ -58,8 +58,11 @@ can make source triage cheaper, more auditable, and reusable across languages.
 | Go or Rust | **Later research milestone** | Considered after the Python + JavaScript/TypeScript IR contract survives cross-language evaluation |
 | Additional languages | **Future / community** | Added through bounded frontends after the adapter contract is stable |
 
-See [MalIR v1](docs/MALIR_SPEC.md) for the current language-neutral event and
-token contract, and [the research plan](docs/RESEARCH.md) for claim gates.
+See [MalIR v1](docs/MALIR_SPEC.md) for the language-neutral contract,
+[effect and purpose context](docs/EFFECT_PURPOSE_V1_2026-08-14.md) for the
+capability/purpose split, and [the research plan](docs/RESEARCH.md) for claim
+gates.
+
 ## Current capabilities
 
 ### Shared analysis and model layer
@@ -72,11 +75,13 @@ token contract, and [the research plan](docs/RESEARCH.md) for claim gates.
   `structural:high` evidence. These are qualitative tiers, not probabilities.
 - Builds bounded behavior motifs such as source-to-network, download-to-execute,
   encoded execution, install-time execution, and persistence writes.
+- Summarizes entrypoints, origins, destinations, transformations, flows, and
+  conservative whole-file purpose candidates with supporting lines.
 - Scores semantic evidence novelty rather than source-line frequency; repeated
   operations and motifs retain occurrence counts without repeatedly adding risk.
-- Consults an optional model over a spam-compacted, bounded sequence. Its
-  probability changes the final score only inside the configurable 20–80
-  uncertainty gate and remains advisory outside it.
+- Consults an optional model over normalized effect context. Inside the 20–80
+  gate it may raise risk, but it cannot lower the deterministic capability
+  score; outside the gate its probability remains advisory.
 - Includes a dependency-free hashed online logistic classifier.
 - Includes full µMal: a 567,746-parameter behavior Transformer trained from
   scratch with classification and masked-token objectives.
@@ -144,7 +149,7 @@ For the much smaller dependency-free online model:
   --model artifacts/sparse.model.json
 ~~~
 
-The bundled 32-row dataset is deliberately synthetic and exists only for
+The bundled 44-row dataset is deliberately synthetic and exists only for
 correctness and training-plumbing tests. Its training accuracy is not evidence
 of real-world detection quality.
 
@@ -163,6 +168,8 @@ is a focused test interface for pasted source or a local `.py` file.
 - The full 567,746-parameter µMal checkpoint runs locally in JavaScript.
 - Equivalent URL/sink repetitions collapse into one score and one model token;
   raw events and occurrence counts remain available for review.
+- The result separates deterministic capability from an effect/purpose profile;
+  purpose candidates are explanations, not claims about author intent.
 - µMal evaluates compacted input in bounded overlapping windows instead of
   silently ignoring behavior after its first 256-token context.
 - Browser smoke vectors match the PyTorch checkpoint during tests.
@@ -331,7 +338,7 @@ measured on 2026-08-14.
 | Direct-call summary overhead | mean +2.59%; median +0.90%; p95 -0.28%; peak allocation +5.27% |
 | Sparse smoke checkpoint | 7,259 bytes; 258 active weights |
 | Optional PyTorch environment | 992 MB on disk; not needed by core/sparse |
-| Default full µMal | 567,746 parameters; 2,280,321-byte FP32 checkpoint |
+| Default full µMal | 567,746 parameters; 2,280,513-byte FP32 checkpoint |
 | Browser full µMal | 567,746 parameters; 2,270,984-byte on-demand binary |
 | µMal single-example inference, 2 threads | median 6.49 ms; p95 12.50 ms |
 | OMCBench pilot, 400 archives / 10,208 Python files | 158.78 s end to end |
@@ -363,9 +370,11 @@ aligned, leakage-audited datasets and independently locked thresholds.
 | `high-risk` | Strong or accumulated static evidence; not final attribution |
 
 Every result retains the operations and source locations that produced its
-score. `dataflow:high` means bounded provenance reached the displayed sink
-inside one callable. `summary:medium` crosses an eligible unique, unrebound
-direct-call boundary. `proximity:low` is a same-scope fallback.
+score. `capability_score` is deterministic reviewable capability, while the
+effect summary explains a conservative whole-file role; neither is proof of
+malicious intent. `dataflow:high` means bounded provenance reached the
+displayed sink inside one callable. `summary:medium` crosses an eligible unique,
+unrebound direct-call boundary. `proximity:low` is a same-scope fallback.
 `structural:high` requires no value flow. None is whole-program proof or a
 calibrated malware probability.
 
@@ -374,11 +383,13 @@ calibrated malware probability.
 | Path | Purpose |
 |---|---|
 | `src/malir/extractor.py` | Current Python AST frontend and API mappings |
+| `src/malir/effects.py` | Whole-file effect and conservative purpose summary |
 | `src/malir/flow.py` | Bounded local provenance and direct-call summaries |
 | `src/malir/motifs.py` | Data-flow, summary, proximity, and structural motif policy |
 | `src/malir/detector.py` | Evidence weights and uncertainty gate |
 | `src/malir/model.py` | Dependency-free sparse classifier |
 | `src/malir/microlm.py` | Full µMal Transformer and training loop |
+| `src/malir/model_tokens.py` | Model target normalization and effect-token schema |
 | `src/malir/archive.py` | Bounded, non-extracting research archive reader |
 | `src/malir/manifest.py` | Dataset metadata and leakage audit |
 | `src/malir/evaluation.py` | Locked evaluation, calibration, and bootstrap |
@@ -386,6 +397,7 @@ calibrated malware probability.
 | `web/` | Browser test interface and on-demand full µMal runtime |
 | `scripts/train_web_model.py` | Full checkpoint trainer and browser exporter |
 | `docs/MALIR_SPEC.md` | Language-neutral IR contract |
+| `docs/EFFECT_PURPOSE_V1_2026-08-14.md` | Capability/effect/purpose decision record |
 | `docs/BOUNDED_CALL_SUMMARIES.md` | Direct-call summary design and limits |
 | `docs/WEB_DEMO.md` | Browser architecture and security boundary |
 | `docs/EVALUATION_PROTOCOL.md` | Leakage and low-FPR evaluation protocol |

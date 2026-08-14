@@ -6,7 +6,8 @@ from dataclasses import dataclass, field
 from heapq import nlargest
 from typing import Literal, Protocol
 
-from .types import Event, Evidence, FileAnalysis
+from .model_tokens import model_event_token
+from .types import Evidence, FileAnalysis
 
 
 class ProbabilityModel(Protocol):
@@ -46,24 +47,9 @@ AUXILIARY_PATH_SEGMENTS = {
 }
 
 
-MODEL_SENSITIVE_TARGET_MARKERS = {
-    "credential",
-    "password",
-    "passwd",
-    "secret",
-    "token",
-    "api_key",
-    "apikey",
-    "private_key",
-    "id_rsa",
-    "id_ed25519",
-    "cookie",
-    "wallet",
-}
-
-
 EVENT_WEIGHTS = {
     "DYNAMIC_EXEC": 27.0,
+    "CODE_COMPILE": 2.0,
     "PROCESS_EXEC": 18.0,
     "UNSAFE_DESERIALIZE": 17.0,
     "NETWORK_SEND": 15.0,
@@ -198,10 +184,11 @@ def decide(
         probability = model.predict_proba(tokens)
         model_consulted = True
         if config.low_gate <= rule_score <= config.high_gate:
-            risk_score = 100.0 * (
+            fused_score = 100.0 * (
                 config.rule_weight * (rule_score / 100.0)
                 + (1.0 - config.rule_weight) * probability
             )
+            risk_score = max(rule_score, fused_score)
             model_used = True
 
     return Decision(
@@ -491,42 +478,28 @@ def _model_tokens(files: list[FileAnalysis]) -> list[str]:
     for item in files:
         file_tokens: list[str] = []
         for event in item.events:
-            key = (
-                "event",
-                event.phase,
-                event.category,
-                event.op,
-                _model_target_class(event),
-            )
+            token = model_event_token(event)
+            key = ("event", token)
             if key in seen:
                 continue
             seen.add(key)
-            file_tokens.append(event.token())
+            file_tokens.append(token)
         for path in item.behavior_paths:
             key = ("motif", path.motif)
             if key in seen:
                 continue
             seen.add(key)
             file_tokens.append(f"MOTIF:{path.motif}")
+        for token in item.effect_summary.tokens:
+            key = ("effect", token)
+            if key in seen:
+                continue
+            seen.add(key)
+            file_tokens.append(token)
         if file_tokens:
-            tokens.append(f"FILE:{item.path}")
+            tokens.append("FILE")
             tokens.extend(file_tokens)
     return tokens
-
-
-def _model_target_class(event: Event) -> str:
-    normalized = event.target.lower().replace("\\", "/").replace(" ", "_")
-    if event.op in {"NETWORK_SEND", "NETWORK_RECEIVE"}:
-        return "network"
-    if event.op in {"SENSITIVE_FILE_READ", "PERSISTENCE_WRITE"}:
-        return "sensitive"
-    if any(marker in normalized for marker in MODEL_SENSITIVE_TARGET_MARKERS):
-        return "sensitive"
-    if event.op in {"FILE_READ", "FILE_WRITE", "FILE_DELETE"}:
-        return "file"
-    if "/" in normalized or normalized.startswith("."):
-        return "path"
-    return "generic"
 
 
 def _is_auxiliary_path(path: str) -> bool:

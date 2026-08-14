@@ -6,6 +6,73 @@ from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
+def _effect_token(value: str) -> str:
+    return value.lower().replace("-", "_").replace(" ", "_")
+
+
+@dataclass(frozen=True, slots=True)
+class PurposeCandidate:
+    label: str
+    confidence: str
+    reason: str
+    lines: tuple[int, ...] = ()
+
+    def token(self) -> str:
+        return f"PURPOSE:{_effect_token(self.label)}"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "confidence": self.confidence,
+            "reason": self.reason,
+            "lines": list(self.lines),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class EffectSummary:
+    entrypoints: tuple[str, ...] = ()
+    data_origins: tuple[str, ...] = ()
+    data_destinations: tuple[str, ...] = ()
+    transformations: tuple[str, ...] = ()
+    flows: tuple[str, ...] = ()
+    purpose_candidates: tuple[PurposeCandidate, ...] = ()
+
+    @property
+    def primary_purpose(self) -> str:
+        if not self.purpose_candidates:
+            return "unknown"
+        return self.purpose_candidates[0].label
+
+    @property
+    def tokens(self) -> list[str]:
+        output = [f"EFFECT:ENTRY:{_effect_token(value)}" for value in self.entrypoints]
+        output.extend(
+            f"EFFECT:ORIGIN:{_effect_token(value)}" for value in self.data_origins
+        )
+        output.extend(
+            f"EFFECT:DESTINATION:{_effect_token(value)}"
+            for value in self.data_destinations
+        )
+        output.extend(f"EFFECT:FLOW:{_effect_token(value)}" for value in self.flows)
+        output.extend(
+            f"EFFECT:TRANSFORM:{_effect_token(value)}" for value in self.transformations
+        )
+        output.extend(item.token() for item in self.purpose_candidates)
+        return output
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "entrypoints": list(self.entrypoints),
+            "data_origins": list(self.data_origins),
+            "data_destinations": list(self.data_destinations),
+            "transformations": list(self.transformations),
+            "flows": list(self.flows),
+            "primary_purpose": self.primary_purpose,
+            "purpose_candidates": [item.to_dict() for item in self.purpose_candidates],
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class Event:
     op: str
@@ -53,6 +120,7 @@ class FileAnalysis:
     bytes_read: int
     events: list[Event] = field(default_factory=list)
     behavior_paths: list[BehaviorPath] = field(default_factory=list)
+    effect_summary: EffectSummary = field(default_factory=EffectSummary)
     parse_error: str | None = None
     truncated: bool = False
     event_limit_reached: bool = False
@@ -61,6 +129,7 @@ class FileAnalysis:
     def tokens(self) -> list[str]:
         tokens = [event.token() for event in self.events]
         tokens.extend(f"MOTIF:{item.motif}" for item in self.behavior_paths)
+        tokens.extend(self.effect_summary.tokens)
         return tokens
 
     def to_dict(self) -> dict[str, Any]:
@@ -73,6 +142,7 @@ class FileAnalysis:
             "parse_error": self.parse_error,
             "events": [event.to_dict() for event in self.events],
             "behavior_paths": [item.to_dict() for item in self.behavior_paths],
+            "effect_summary": self.effect_summary.to_dict(),
             "tokens": self.tokens,
         }
 
@@ -121,6 +191,7 @@ class ScanReport:
             }[self.verdict],
             "verdict": self.verdict,
             "risk_score": round(self.risk_score, 3),
+            "capability_score": round(self.rule_score, 3),
             "rule_score": round(self.rule_score, 3),
             "model_probability": (
                 None

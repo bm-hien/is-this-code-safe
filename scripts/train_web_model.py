@@ -18,14 +18,25 @@ from malir.microlm import HashedTokenizer, MicroConfig, MicroMal, train_micro
 
 SMOKE_TOKENS = (
     (
-        "P:runtime|C:source|O:FILE_READ|T:readme.md",
-        "P:runtime|C:sink|O:FILE_WRITE|T:report.json",
+        "FILE",
+        "P:runtime|C:source|O:FILE_READ|T:file",
+        "P:runtime|C:sink|O:FILE_WRITE|T:file",
+        "EFFECT:ENTRY:library_callable",
+        "EFFECT:ORIGIN:local_file",
+        "EFFECT:DESTINATION:local_artifact",
     ),
     (
-        "P:runtime|C:source|O:ENV_READ|T:ci_token",
-        "P:runtime|C:transform|O:ENCODE|T:base64.b64encode",
-        "P:runtime|C:sink|O:NETWORK_SEND|T:https://example.invalid/collect",
+        "FILE",
+        "P:runtime|C:source|O:ENV_READ|T:sensitive",
+        "P:runtime|C:transform|O:ENCODE|T:generic",
+        "P:runtime|C:sink|O:NETWORK_SEND|T:network",
         "MOTIF:credential_or_file_exfil",
+        "EFFECT:ENTRY:library_callable",
+        "EFFECT:ORIGIN:environment",
+        "EFFECT:DESTINATION:network",
+        "EFFECT:FLOW:sensitive_data_to_network",
+        "EFFECT:TRANSFORM:encoding",
+        "PURPOSE:sensitive_data_transfer",
     ),
 )
 
@@ -69,7 +80,9 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _load_model(checkpoint_path: Path) -> tuple[MicroMal, MicroConfig]:
+def _load_model(
+    checkpoint_path: Path,
+) -> tuple[MicroMal, MicroConfig, dict[str, Any]]:
     checkpoint = torch.load(
         checkpoint_path,
         map_location="cpu",
@@ -80,7 +93,7 @@ def _load_model(checkpoint_path: Path) -> tuple[MicroMal, MicroConfig]:
     config = MicroConfig(**checkpoint["config"])
     model = MicroMal(config).eval()
     model.load_state_dict(checkpoint["state_dict"])
-    return model, config
+    return model, config, dict(checkpoint.get("metadata", {}))
 
 
 def _smoke_vectors(model: MicroMal, config: MicroConfig) -> list[dict[str, Any]]:
@@ -102,7 +115,7 @@ def export_checkpoint(
     binary_path: Path,
     module_path: Path,
 ) -> dict[str, Any]:
-    model, config = _load_model(checkpoint_path)
+    model, config, checkpoint_metadata = _load_model(checkpoint_path)
     state = model.state_dict()
     binary_path.parent.mkdir(parents=True, exist_ok=True)
     module_path.parent.mkdir(parents=True, exist_ok=True)
@@ -134,6 +147,13 @@ def export_checkpoint(
             "parameters": sum(parameter.numel() for parameter in model.parameters()),
             "checkpoint_sha256": _sha256(checkpoint_path),
             "weight_format": "float32-little-endian",
+            "feature_schema": checkpoint_metadata.get(
+                "feature_schema", "legacy-event-tokens"
+            ),
+            "training_examples": checkpoint_metadata.get("training_examples"),
+            "training_epochs": checkpoint_metadata.get("training_epochs"),
+            "training_accuracy": checkpoint_metadata.get("training_accuracy"),
+            "calibration": checkpoint_metadata.get("calibration", "unknown"),
         },
         "config": asdict(config),
         "binary": {

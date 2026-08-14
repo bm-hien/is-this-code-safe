@@ -175,6 +175,34 @@ exact flow is evidence of movement, not intent. The next experiment must
 redesign aggregation and contextual negative evidence before adding model
 capacity. See [the complete report](OMCBENCH_PILOT_2026-08-12.md).
 
+### 2.5 Evidence update: capability is not purpose
+
+The obfuscator hard negative exposed a representation failure rather than an
+event-extraction failure. Dynamic execution, compilation, imports, encoding, and
+file output were real, but isolated capability counts did not explain that the
+dominant flow was local source to local generated artifact.
+
+Effect-aware v1 adds entrypoint, origin, destination, transformation, flow, and
+conservative purpose-candidate context. This follows
+[CodeQL's source/propagation/sink separation](https://codeql.github.com/docs/writing-codeql-queries/about-data-flow-analysis/),
+[GraphCodeBERT's data-flow representation](https://arxiv.org/abs/2009.08366),
+and prior work that models malicious behavior through
+[dependencies between operations](https://www.cs.ucdavis.edu/~devanbu/teaching/289/Schedule_files/Mining%20Specifications%20of%20Malicious%20Behavior-1.pdf)
+rather than API presence alone.
+
+Concrete targets are normalized to coarse model classes, filenames become a
+constant boundary, compilation is separated from execution, and repeated
+literal imports are contextual. The model receives these effect tokens, while
+the deterministic capability score remains independently auditable. Inside the
+gate, µMal can only raise risk; it cannot lower the capability floor.
+
+On the untracked `ff.py` case, the new checkpoint predicts about 0.36%, the
+capability and final risk scores are 48, and the result is `review` with a
+high-confidence `local-code-transformer` candidate. This is a targeted
+hard-negative regression, not evidence of calibrated intent recognition. The
+full decision record is in
+[EFFECT_PURPOSE_V1_2026-08-14.md](EFFECT_PURPOSE_V1_2026-08-14.md).
+
 ## 3. Research hypothesis
 
 The candidate contribution is an evidence-carrying behavioral compiler plus a
@@ -204,7 +232,8 @@ per scanned package. This is a target, not yet a measured production rate.
 
 Raw code lets a model learn package names, comments, formatting, and copied
 boilerplate. MalIR retains operations, lifecycle phase, target class, order,
-and evidence location. It deliberately discards most lexical content.
+evidence location, and a conservative effect/purpose summary. It deliberately
+discards concrete filenames, URLs, and most lexical content.
 
 The current extractor first emits events, then uses a cheap candidate gate to
 decide whether a bounded provenance pass can produce a supported path. That
@@ -230,10 +259,10 @@ tokens. Training combines classification with masked-token prediction. No
 pretrained weights, natural-language tokenizer, retrieval system, or hosted API
 is used.
 
-The detector compacts repeated semantic event classes before model input and
-uses bounded overlapping contexts instead of silently truncating after one
-window. A supplied model is always observable, but its probability changes the
-decision only inside the uncertainty gate.
+The detector normalizes targets, compacts repeated semantic event classes, and
+adds effect context before bounded overlapping-window inference. A supplied
+model is always observable. Inside the uncertainty gate it may raise risk, but
+`max(capability, fused)` prevents it from lowering deterministic capability.
 
 The fair test is not “µMal versus a huge LLM.” It is whether µMal improves
 low-FPR recall over rules, sparse MalIR, and an equal-parameter raw-source model
@@ -435,7 +464,7 @@ Default configuration: vocabulary 4,096, maximum length 256, width 96, four
 attention heads, two encoder layers, FFN 192, 567,746 parameters. The benchmark
 uses two Torch threads, ten warmups, and 300 timed single-example predictions.
 
-- FP32 checkpoint: 2,280,321 bytes;
+- FP32 checkpoint: 2,280,513 bytes;
 - median inference: 6.4882 ms;
 - p95 inference: 12.5015 ms;
 - optional PyTorch training environment: 992 MB on disk.
@@ -446,14 +475,14 @@ TransformerEncoder failed during inference. The supported FP32 path remains
 small and fast; INT8 work should target torchao or ONNX Runtime and must beat
 this measured baseline before inclusion.
 
-Training on the bundled 32 synthetic rows for 20 epochs reached 100% training
+Training on the bundled 44 synthetic rows for 20 epochs reached 100% training
 accuracy. That is only a smoke test demonstrating learnability and checkpoint
 round-trip; it says nothing about generalization.
 
 ### Test state
 
-One hundred eighty-five automated tests currently pass: 169 Python tests and
-16 browser tests. They cover extraction ordering, alias resolution, non-execution,
+One hundred ninety-eight automated tests currently pass: 178 Python tests and
+20 browser tests. They cover extraction ordering, alias resolution, non-execution,
 syntax errors and warning isolation, deterministic tokens, symlinks and size
 limits, bounded hostile archives, source-set/normalized-AST grouping, local and
 direct-call provenance counterexamples and gating, semantic repeat saturation,

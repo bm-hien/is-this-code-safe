@@ -12,13 +12,17 @@ CALL_GROUPS: tuple[tuple[frozenset[str], str, str, str], ...] = (
                 "builtins.eval",
                 "exec",
                 "builtins.exec",
-                "compile",
-                "builtins.compile",
             }
         ),
         "DYNAMIC_EXEC",
         "sink",
         "dynamic code execution",
+    ),
+    (
+        frozenset({"compile", "builtins.compile"}),
+        "CODE_COMPILE",
+        "transform",
+        "runtime source compilation",
     ),
     (
         frozenset(
@@ -182,8 +186,8 @@ PROCESS_PREFIXES = (
     "os.exec",
     "subprocess.",
 )
-READ_METHODS = {".read_text", ".read_bytes", ".read"}
-WRITE_METHODS = {".write_text", ".write_bytes", ".write"}
+READ_METHODS = {".read_text", ".read_bytes"}
+WRITE_METHODS = {".write_text", ".write_bytes"}
 
 
 def classify_call(name: str) -> tuple[str, str, str] | None:
@@ -216,7 +220,6 @@ SENSITIVE_PATH_MARKERS = (
     "history",
     "/etc/passwd",
     "/etc/shadow",
-    "token",
 )
 
 PERSISTENCE_PATH_MARKERS = (

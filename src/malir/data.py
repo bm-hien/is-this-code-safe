@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from .extractor import PythonExtractor
+from .model_tokens import canonicalize_model_tokens
 
 POSITIVE_LABELS = {1, "1", "malicious", "suspicious", "positive"}
 NEGATIVE_LABELS = {0, "0", "benign", "clean", "negative"}
@@ -22,7 +23,9 @@ def load_examples(path: str | Path) -> list[tuple[list[str], int]]:
             try:
                 record = json.loads(raw_line)
                 label = _parse_label(record["label"])
-                tokens = _tokens_for_record(record, dataset_path.parent, extractor)
+                tokens = canonicalize_model_tokens(
+                    _tokens_for_record(record, dataset_path.parent, extractor)
+                )
             except (KeyError, TypeError, ValueError, OSError) as error:
                 raise ValueError(
                     f"invalid dataset row {line_number}: {error}"

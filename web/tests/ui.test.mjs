@@ -50,7 +50,9 @@ test("page wires a local Monaco bundle and same-origin worker policy", async () 
   assert.match(app, /void createSourceEditor/);
   assert.doesNotMatch(app, /await createSourceEditor/);
   assert.doesNotMatch(app, /gated off/);
-  assert.match(app, /probability shown for audit/);
+  assert.match(app, /capability floor is never reduced/);
+  assert.match(html, /id="purpose-title"/);
+  assert.match(html, /Capability score/);
   assert.match(adapter, /import\("\.\/assets\/monaco-editor\.mjs"\)/);
   assert.match(adapter, /kind: "textarea"/);
   assert.match(adapter, /kind: "monaco"/);

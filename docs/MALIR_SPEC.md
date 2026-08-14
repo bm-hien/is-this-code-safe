@@ -18,6 +18,7 @@ Each analyzed file emits:
 | parse_error | Sanitized syntax/recursion error or null |
 | events | Ordered evidence-bearing behavior events |
 | behavior_paths | Bounded data-flow, direct-call summary, proximity, and structural motifs |
+| effect_summary | Conservative entrypoint, origin, destination, transform, flow, and purpose context |
 | tokens | Deterministic model sequence |
 
 Oversized files are skipped by the scanner rather than partially parsed under
@@ -39,8 +40,10 @@ use and future streaming frontends.
 
 The initial vocabulary includes IMPORT, ENV_READ, FILE_READ,
 SENSITIVE_FILE_READ, FILE_WRITE, FILE_DELETE, PERSISTENCE_WRITE,
-SYSTEM_DISCOVERY, ENCODE, DECODE, DYNAMIC_IMPORT, UNSAFE_DESERIALIZE,
-NETWORK_RECEIVE, NETWORK_SEND, PROCESS_EXEC, and DYNAMIC_EXEC.
+SYSTEM_DISCOVERY, ENCODE, DECODE, CODE_COMPILE, DYNAMIC_IMPORT,
+UNSAFE_DESERIALIZE, NETWORK_RECEIVE, NETWORK_SEND, PROCESS_EXEC, and
+DYNAMIC_EXEC. `CODE_COMPILE` represents compilation as a transformation;
+compilation alone is not dynamic execution.
 
 ## Token form
 
@@ -50,11 +53,13 @@ Each event becomes one token:
 P:<phase>|C:<category>|O:<operation>|T:<normalized-target>
 ~~~
 
-Behavior paths append a token of the form MOTIF:<name>. File boundaries are
-added by the detector before model input. The serialized file record retains
-the complete deterministic token list. The detector separately compacts model
-input by phase, category, operation, and a coarse target class so repeated
-syntax cannot crowd later semantic behavior out of a bounded model context.
+Behavior paths append `MOTIF:<name>`. Effect summaries append
+`EFFECT:<dimension>:<value>` for `ENTRY`, `ORIGIN`, `DESTINATION`, `FLOW`, and
+`TRANSFORM`, plus `PURPOSE:<candidate>` tokens. The serialized file record
+retains the complete deterministic token list. Model input uses a constant
+`FILE` boundary and compacts events by phase, category, operation, and
+a coarse target class. Concrete filenames and URLs are not model vocabulary;
+repeated syntax cannot crowd later semantic behavior out of a bounded context.
 Sparse features use signed BLAKE2b hashing over one-to-three-token n-grams.
 µMal uses a separately personalized BLAKE2b hash into a fixed 4,096-token
 default vocabulary.
@@ -140,12 +145,29 @@ imported or nested functions, methods, globals, closures, object attributes,
 mutation, generator iteration, async scheduling beyond immediate `await`,
 dynamic dispatch, decorators, exceptions, or other modules. Every path keeps
 its supporting real event indexes for review; the internal call-boundary marker
-is never serialized. Model tokens remain
-`MOTIF:<name>` regardless of evidence kind, so this additive metadata does not
-invalidate existing v1 sparse or µMal checkpoints.
+is never serialized. Path tokens remain `MOTIF:<name>` regardless of evidence
+kind. Effect context changes the model-visible sequence, so compatible
+checkpoints declare `feature_schema = malir.effect-context.v1` and must be
+retrained and re-exported.
 
 See [the bounded-summary design note](BOUNDED_CALL_SUMMARIES.md) for its
 research basis, conservative cases, and regression matrix.
+
+## Effect and purpose context
+
+`EffectSummary` separates whole-file context from isolated operations. It
+records entrypoints, data origins and destinations, transformations, flows, a
+primary purpose candidate, and ranked candidates with qualitative confidence,
+reason, and supporting lines. Current candidates include local code transformer,
+sensitive-data transfer, remote code executor, persistence modifier, and
+destructive file operator.
+
+Candidates require structural or motif support and are deliberately narrower
+than human intent. The Python frontend derives them from AST structure; the
+browser lexical frontend may emit the same candidate at lower confidence. A
+local code transformer can still contain reviewable execution capability, and a
+malicious program can disguise that role. See
+[the effect/purpose decision record](EFFECT_PURPOSE_V1_2026-08-14.md).
 
 ## Risk and model separation
 
@@ -162,12 +184,14 @@ copying the same URL, sink, or motif onto more source lines. Summary paths also
 remove their covered source/sink event contributions. `legacy-top8` remains
 available explicitly for reproducing earlier research baselines.
 
-A supplied model is consulted over the compacted sequence even outside the
-decision gate, so its probability remains observable for audit. The probability
-changes the final score only when the rule score is from 20 through 80; inside
-that gate it is combined with the rule score at 35%/65%. JSON distinguishes
-`model_consulted` from `model_used`, where the latter means that probability
-affected the decision.
+JSON exposes the deterministic score as both historical `rule_score` and the
+clearer `capability_score`. A supplied model is consulted over the compacted
+sequence even outside the 20–80 gate, so its probability remains observable for
+audit. Inside the gate, fusion computes 65% capability plus 35% model
+probability, then applies `risk = max(capability, fused)`. The model can raise an
+ambiguous decision but cannot erase concrete capability evidence. `model_used`
+means the sample entered this fusion gate; `model_consulted` also includes
+advisory inference outside it.
 
 µMal evaluates at most 254 behavior tokens plus boundary tokens per window.
 Longer compacted sequences use up to 16 overlapping windows and return the

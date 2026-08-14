@@ -139,6 +139,27 @@ dynamic dispatch chưa được theo dõi chính xác. Chi tiết thiết kế v
 counterexample nằm ở
 [BOUNDED_CALL_SUMMARIES.md](BOUNDED_CALL_SUMMARIES.md).
 
+### Ngữ cảnh tác dụng và purpose
+
+Ca hard negative `ff.py` cho thấy evidence đúng vẫn có thể dẫn tới diễn giải
+sai: `exec`, compile, import động, encode và ghi file là capability thật, nhưng
+pipeline chi phối của tool là đọc source cục bộ, biến đổi AST/VM rồi sinh artifact
+cục bộ. MalIR vì vậy bổ sung entrypoint, nguồn/đích dữ liệu, transformation,
+flow và purpose candidate có confidence, lý do và dòng hỗ trợ.
+
+Frontend AST hiện gắn ca này là `local-code-transformer` confidence cao. µMal
+sau khi chuẩn hóa target và nhận effect token cho xác suất khoảng 0,36%;
+capability và risk đều là 48, verdict `review`. Model không được phép xóa bằng
+chứng: trong gate áp dụng `risk = max(capability, fused)`. Filename và URL cụ
+thể không còn trở thành token hash riêng; `compile` được tách khỏi execution,
+literal `__import__` được coi là context, và `.write` không rõ kiểu không tự động
+bị coi là ghi file.
+
+Đây là regression false-positive, chưa phải model hiểu ý định đã được hiệu
+chỉnh. Dataset bundled có 44 dòng tổng hợp, trong đó 12 hard negative chỉ mô tả
+role đã được làm sạch; không copy source của `ff.py`. Chi tiết nằm ở
+[EFFECT_PURPOSE_V1_2026-08-14.md](EFFECT_PURPOSE_V1_2026-08-14.md).
+
 ### Hai mô hình
 
 Mô hình sparse dùng signed feature hashing trên MalIR n-gram và online logistic
@@ -147,15 +168,16 @@ regression tự viết bằng standard library. Smoke checkpoint chỉ 7.259 byt
 µMal là Transformer encoder 567.746 tham số, vocabulary hash 4.096, context
 256 token mỗi cửa sổ, hai layer, width 96, bốn attention head. Nó học
 classification cùng masked-behavior-token prediction từ đầu, không tải
-foundation model. Input được compact theo phase/category/operation/target-class;
-chuỗi dài dùng tối đa 16 cửa sổ chồng 32 token và lấy xác suất lớn nhất, không
-cộng xác suất theo kích thước source.
+foundation model. Input dùng target-class, effect/purpose token và boundary
+`FILE` cố định rồi compact theo ngữ nghĩa; chuỗi dài dùng tối đa 16 cửa sổ
+chồng 32 token và lấy xác suất lớn nhất, không cộng xác suất theo kích thước
+source.
 
 Khi model đã được cung cấp hoặc tải về, hệ thống luôn hiển thị xác suất để audit.
-Xác suất chỉ thay đổi risk score trong gate 20–80; bên ngoài gate nó là advisory
-và rule score được giữ nguyên. Đây là conditional decision fusion, không còn là
-conditional compute. Việc này giảm trạng thái “gated off” nhưng vẫn ngăn model
-yếu làm đảo quyết định rule rõ ràng.
+Trong gate 20–80, xác suất có thể nâng risk nhưng
+`risk = max(capability, fused)` không cho model hạ capability; bên ngoài gate nó
+là advisory. Đây là conditional decision fusion, không còn là conditional
+compute, và UI không còn gọi trạng thái ngoài gate là “gated off.”
 
 ### Lớp audit và evaluation mới
 
@@ -200,9 +222,9 @@ Máy: 2 vCPU, khoảng 8 GB RAM, Python 3.12.1, Linux x86-64.
 | Bật summary trên cùng mix | median 1.298,90 ms; p95 1.468,30 ms; 750,89 file/s |
 | Overhead riêng của summary | mean +2,59%; median +0,90%; p95 -0,28%; allocation +5,27% |
 | Sparse checkpoint | 7.259 byte |
-| µMal FP32 checkpoint | 2.280.321 byte |
+| µMal FP32 checkpoint | 2.280.513 byte |
 | µMal inference, 2 thread | median 6,49 ms; p95 12,50 ms |
-| Test | 169 Python + 16 browser test pass |
+| Test | 178 Python + 20 browser test pass |
 | Môi trường train PyTorch | 992 MB; không cần cho core/sparse |
 
 Các hàng dataflow đầu tiên được đo ngày 2026-08-12. Ba hàng direct-call được
@@ -216,7 +238,7 @@ Mỗi mode được warm-up rồi đo 21 lượt với tracemalloc. Một probe 
 khi có candidate gate từng cho median overhead khoảng 20%; kết quả đó dẫn tới
 tối ưu chỉ chạy pass hai trên file có candidate. Corpus benchmark là template
 trơ với 95% mẫu thông thường và 5% source có hình dạng đáng ngờ. Dataset train
-có 32 dòng tổng hợp và được dùng lại để smoke
+có 44 dòng tổng hợp và được dùng lại để smoke
 evaluation. Vì vậy 100% training score chỉ chứng minh model học/chạy/save/load
 được; tuyệt đối không phải số liệu detection thực tế.
 

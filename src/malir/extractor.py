@@ -11,6 +11,7 @@ import warnings
 from dataclasses import dataclass
 from pathlib import Path
 
+from .effects import build_effect_summary
 from .flow import build_local_dataflow_paths
 from .motifs import build_behavior_paths
 from .policy import (
@@ -115,6 +116,11 @@ class PythonExtractor:
             result.events,
             dataflow_paths=dataflow_paths,
         )
+        result.effect_summary = build_effect_summary(
+            tree,
+            result.events,
+            result.behavior_paths,
+        )
         return result
 
 
@@ -135,6 +141,8 @@ class _BehaviorVisitor(ast.NodeVisitor):
         self.function_stack: list[str] = []
         self.node_events: dict[int, list[int]] = {}
         self.call_names: dict[int, str] = {}
+        self.import_keys: set[tuple[str, str, str]] = set()
+        self.file_handles: dict[str, str] = {}
 
     @property
     def function(self) -> str:
@@ -158,6 +166,11 @@ class _BehaviorVisitor(ast.NodeVisitor):
         target: str,
         detail: str,
     ) -> None:
+        if op == "IMPORT":
+            key = (self.function, self.phase, target)
+            if key in self.import_keys:
+                return
+            self.import_keys.add(key)
         if len(self.events) >= self.max_events:
             self.event_limit_reached = True
             return
@@ -194,27 +207,63 @@ class _BehaviorVisitor(ast.NodeVisitor):
 
     def visit_Assign(self, node: ast.Assign) -> None:
         qualified = self._alias_value(node.value)
-        if qualified:
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    self.aliases[target.id] = qualified
+        file_target = self._open_target(node.value)
+        for target in node.targets:
+            if not isinstance(target, ast.Name):
+                continue
+            if qualified:
+                self.aliases[target.id] = qualified
+            if file_target is None:
+                self.file_handles.pop(target.id, None)
+            else:
+                self.file_handles[target.id] = file_target
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
         qualified = self._alias_value(node.value)
-        if isinstance(node.target, ast.Name) and qualified:
-            self.aliases[node.target.id] = qualified
+        file_target = self._open_target(node.value)
+        if isinstance(node.target, ast.Name):
+            if qualified:
+                self.aliases[node.target.id] = qualified
+            if file_target is None:
+                self.file_handles.pop(node.target.id, None)
+            else:
+                self.file_handles[node.target.id] = file_target
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        previous_handles = self.file_handles
+        self.file_handles = {}
         self.function_stack.append(node.name)
         self.generic_visit(node)
         self.function_stack.pop()
+        self.file_handles = previous_handles
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        previous_handles = self.file_handles
+        self.file_handles = {}
         self.function_stack.append(node.name)
         self.generic_visit(node)
         self.function_stack.pop()
+        self.file_handles = previous_handles
+
+    def visit_With(self, node: ast.With) -> None:
+        self._visit_with(node)
+
+    def visit_AsyncWith(self, node: ast.AsyncWith) -> None:
+        self._visit_with(node)
+
+    def _visit_with(self, node: ast.With | ast.AsyncWith) -> None:
+        previous_handles = dict(self.file_handles)
+        for item in node.items:
+            self.visit(item.context_expr)
+            if isinstance(item.optional_vars, ast.Name):
+                target = self._open_target(item.context_expr)
+                if target is not None:
+                    self.file_handles[item.optional_vars.id] = target
+        for statement in node.body:
+            self.visit(statement)
+        self.file_handles = previous_handles
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
         name = self._qualified_name(node.value)
@@ -233,6 +282,11 @@ class _BehaviorVisitor(ast.NodeVisitor):
         if name in {"open", "builtins.open", "io.open"}:
             self._handle_open(node, name)
             return
+        typed_file_call = self._typed_file_call(node)
+        if typed_file_call is not None:
+            op, category, target, detail = typed_file_call
+            self._add(node, op, category, target, detail)
+            return
         classified = classify_call(name)
         if classified:
             op, category, detail = classified
@@ -242,12 +296,57 @@ class _BehaviorVisitor(ast.NodeVisitor):
                     "source",
                     "remote communication",
                 )
+            if op == "DYNAMIC_IMPORT" and node.args:
+                literal_module = self._literal(node.args[0])
+                if literal_module and not literal_module.startswith("<bytes:"):
+                    op, category, detail = (
+                        "IMPORT",
+                        "context",
+                        "literal module import",
+                    )
             target = self._call_target(node, name) or name
             if op == "FILE_READ" and is_sensitive_path(target):
                 op, detail = "SENSITIVE_FILE_READ", "sensitive file access"
             if op == "FILE_WRITE" and is_persistence_path(target):
                 op, detail = "PERSISTENCE_WRITE", "autostart location write"
             self._add(node, op, category, target, detail)
+
+    def _typed_file_call(
+        self,
+        node: ast.Call,
+    ) -> tuple[str, str, str, str] | None:
+        if not isinstance(node.func, ast.Attribute):
+            return None
+        method = node.func.attr
+        if method not in {"read", "write"}:
+            return None
+        receiver = node.func.value
+        target = None
+        if isinstance(receiver, ast.Name):
+            target = self.file_handles.get(receiver.id)
+        elif isinstance(receiver, ast.Call):
+            target = self._open_target(receiver)
+        if target is None:
+            return None
+        if method == "read":
+            op, category, detail = "FILE_READ", "source", "typed file read"
+            if is_sensitive_path(target):
+                op, detail = "SENSITIVE_FILE_READ", "sensitive file access"
+        else:
+            op, category, detail = "FILE_WRITE", "sink", "typed file write"
+            if is_persistence_path(target):
+                op, detail = "PERSISTENCE_WRITE", "autostart location write"
+        return op, category, target, detail
+
+    def _open_target(self, node: ast.AST | None) -> str | None:
+        if not isinstance(node, ast.Call) or not node.args:
+            return None
+        factory = self._qualified_name(node.func)
+        if factory not in {"open", "builtins.open", "io.open"}:
+            return None
+        return (
+            self._literal(node.args[0]) or self._qualified_name(node.args[0]) or "file"
+        )
 
     def _handle_open(self, node: ast.Call, name: str) -> None:
         path = self._literal(node.args[0]) if node.args else None
