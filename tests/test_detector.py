@@ -50,6 +50,17 @@ class _RecordingModel:
         return self.probability
 
 
+class _AbstainingModel:
+    def predict_details(self, _tokens: list[str]) -> dict:
+        return {
+            "probability": 0.99,
+            "supported": False,
+            "token_coverage": 0.5,
+            "nearest_similarity": 0.1,
+            "unknown_tokens": ["O:UNKNOWN"],
+        }
+
+
 def _repeated_exfil_analysis(repeats: int) -> FileAnalysis:
     events = [
         _event("ENV_READ", 1, target="CI_TOKEN"),
@@ -119,6 +130,21 @@ def test_model_is_consulted_but_advisory_outside_decision_gate():
     assert result.model_consulted is True
     assert result.model_used is False
     assert result.risk_score == 0.0
+
+
+def test_unsupported_model_probability_cannot_change_capability_score():
+    result = decide([_analysis([_event("DYNAMIC_EXEC", 1)])], _AbstainingModel())
+
+    assert result.rule_score == 27.0
+    assert result.risk_score == result.rule_score
+    assert result.model_probability == 0.99
+    assert result.model_consulted is True
+    assert result.model_used is False
+    assert result.model_supported is False
+    assert result.model_abstained is True
+    assert result.model_token_coverage == 0.5
+    assert result.model_nearest_similarity == 0.1
+    assert result.model_unknown_tokens == ["O:UNKNOWN"]
 
 
 def test_context_max_deduplicates_and_does_not_sum_functions():

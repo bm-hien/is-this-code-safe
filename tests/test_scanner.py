@@ -31,6 +31,27 @@ def test_inert_hard_negatives_are_not_upgraded_by_local_flow():
         )
 
 
+def test_scanner_serializes_model_support_abstention():
+    class UnsupportedModel:
+        def predict_details(self, _tokens: list[str]) -> dict:
+            return {
+                "probability": 0.8,
+                "supported": False,
+                "token_coverage": 0.5,
+                "nearest_similarity": 0.1,
+                "unknown_tokens": ["O:FUTURE"],
+            }
+
+    report = Scanner(model=UnsupportedModel()).scan(FIXTURES / "benign")
+    output = report.to_dict()
+
+    assert output["model_supported"] is False
+    assert output["model_abstained"] is True
+    assert output["model_used"] is False
+    assert output["model_unknown_tokens"] == ["O:FUTURE"]
+    assert any("abstained" in warning for warning in output["warnings"])
+
+
 def test_scanner_skips_symlink(tmp_path):
     target = tmp_path / "target.py"
     target.write_text("print('not executed')", encoding="utf-8")

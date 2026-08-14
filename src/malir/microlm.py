@@ -16,6 +16,8 @@ from typing import Any
 import torch
 from torch import Tensor, nn
 
+from .support import assess_model_support, validate_support_profile
+
 PAD_ID = 0
 BOS_ID = 1
 EOS_ID = 2
@@ -156,12 +158,21 @@ class HashedTokenizer:
 
 
 class MicroMalPredictor:
-    def __init__(self, model: MicroMal, *, temperature: float = 1.0) -> None:
+    def __init__(
+        self,
+        model: MicroMal,
+        *,
+        temperature: float = 1.0,
+        support_profile: dict[str, Any] | None = None,
+    ) -> None:
         if not math.isfinite(temperature) or temperature <= 0.0:
             raise ValueError("temperature must be finite and positive")
+        if support_profile is not None:
+            validate_support_profile(support_profile)
         self.model = model.eval()
         self.tokenizer = HashedTokenizer(model.config)
         self.temperature = float(temperature)
+        self.support_profile = support_profile
 
     @classmethod
     def load(
@@ -182,16 +193,26 @@ class MicroMalPredictor:
         model.load_state_dict(checkpoint["state_dict"])
         metadata = checkpoint.get("metadata", {})
         temperature = float(metadata.get("temperature", 1.0))
-        return cls(model, temperature=temperature)
+        support_profile = metadata.get("support_profile")
+        return cls(
+            model,
+            temperature=temperature,
+            support_profile=support_profile,
+        )
 
-    def predict_proba(self, tokens: list[str]) -> float:
+    def predict_details(self, tokens: list[str]) -> dict[str, Any]:
         windows = self.tokenizer.encode_windows(tokens)
         input_ids = torch.tensor([ids for ids, _ in windows], dtype=torch.long)
         attention = torch.tensor([mask for _, mask in windows], dtype=torch.bool)
         with torch.inference_mode():
             logits, _ = self.model(input_ids, attention)
             calibrated = logits / self.temperature
-            return float(torch.softmax(calibrated, dim=-1)[:, 1].max())
+            probability = float(torch.softmax(calibrated, dim=-1)[:, 1].max())
+        support = assess_model_support(tokens, self.support_profile)
+        return {"probability": probability, **support.to_dict()}
+
+    def predict_proba(self, tokens: list[str]) -> float:
+        return float(self.predict_details(tokens)["probability"])
 
     @property
     def parameter_count(self) -> int:
@@ -211,6 +232,13 @@ def train_micro(
     seed: int = 13,
     *,
     validation_examples: list[tuple[list[str], int]] | None = None,
+    pair_constraints: list[tuple[int, int]] | None = None,
+    validation_pair_constraints: list[tuple[int, int]] | None = None,
+    consistency_groups: list[list[int]] | None = None,
+    validation_consistency_groups: list[list[int]] | None = None,
+    pair_margin: float = 1.0,
+    pair_weight: float = 0.15,
+    consistency_weight: float = 0.05,
     patience: int = 8,
     minimum_epochs: int = 5,
     checkpoint_metadata: dict[str, Any] | None = None,
@@ -226,9 +254,26 @@ def train_micro(
         raise ValueError("label_smoothing must be in [0, 1)")
     if patience < 1 or minimum_epochs < 1:
         raise ValueError("patience and minimum_epochs must be positive")
+    if pair_margin <= 0.0:
+        raise ValueError("pair_margin must be positive")
+    if pair_weight < 0.0 or consistency_weight < 0.0:
+        raise ValueError("structured objective weights cannot be negative")
     _require_binary_labels(examples, "training")
+    train_pairs = list(pair_constraints or ())
+    train_groups = list(consistency_groups or ())
+    _validate_structured_indexes(examples, train_pairs, train_groups, "training")
+    validation_pairs = list(validation_pair_constraints or ())
+    validation_groups = list(validation_consistency_groups or ())
     if validation_examples is not None:
         _require_binary_labels(validation_examples, "validation")
+        _validate_structured_indexes(
+            validation_examples,
+            validation_pairs,
+            validation_groups,
+            "validation",
+        )
+    elif validation_pairs or validation_groups:
+        raise ValueError("validation structure requires validation examples")
 
     torch.set_num_threads(max(1, threads))
     torch.manual_seed(seed)
@@ -280,6 +325,24 @@ def train_micro(
             optimizer.step()
             epoch_loss += float(loss.detach())
             batches += 1
+
+        if train_pairs or train_groups:
+            ids, mask, _labels = _batch_tensors(prepared)
+            logits, _ = model(ids, mask)
+            structured_loss = _structured_loss(
+                logits,
+                train_pairs,
+                train_groups,
+                pair_margin=pair_margin,
+                pair_weight=pair_weight,
+                consistency_weight=consistency_weight,
+            )
+            optimizer.zero_grad(set_to_none=True)
+            structured_loss.backward()
+            nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            epoch_loss += float(structured_loss.detach())
+            batches += 1
         last_loss = epoch_loss / max(1, batches)
 
         if validation_prepared is None:
@@ -319,6 +382,9 @@ def train_micro(
         batch_size,
     )
     training_metrics = _classification_metrics(training_logits, training_labels)
+    training_metrics.update(
+        _structured_metrics(training_logits, train_pairs, train_groups)
+    )
 
     temperature = 1.0
     validation_metrics = None
@@ -333,6 +399,13 @@ def train_micro(
             validation_logits,
             validation_labels,
         )
+        validation_metrics_uncalibrated.update(
+            _structured_metrics(
+                validation_logits,
+                validation_pairs,
+                validation_groups,
+            )
+        )
         temperature = _fit_conservative_temperature(
             validation_logits,
             validation_labels,
@@ -342,11 +415,19 @@ def train_micro(
             validation_labels,
             temperature=temperature,
         )
+        validation_metrics.update(
+            _structured_metrics(
+                validation_logits,
+                validation_pairs,
+                validation_groups,
+                temperature=temperature,
+            )
+        )
 
     metadata = dict(checkpoint_metadata or {})
+    metadata.setdefault("feature_schema", "malir.effect-context.v2")
     metadata.update(
         {
-            "feature_schema": "malir.effect-context.v2",
             "training_examples": len(examples),
             "validation_examples": len(validation_examples or ()),
             "training_epochs": best_epoch or epochs_completed,
@@ -362,6 +443,13 @@ def train_micro(
                 else "uncalibrated-no-validation"
             ),
             "label_smoothing": label_smoothing,
+            "structured_objective": {
+                "pair_constraints": len(train_pairs),
+                "consistency_groups": len(train_groups),
+                "pair_margin": pair_margin,
+                "pair_weight": pair_weight,
+                "consistency_weight": consistency_weight,
+            },
             "seed": seed,
         }
     )
@@ -385,6 +473,8 @@ def train_micro(
         "training_metrics": training_metrics,
         "validation_metrics": validation_metrics,
         "validation_metrics_uncalibrated": validation_metrics_uncalibrated,
+        "pair_constraints": len(train_pairs),
+        "consistency_groups": len(train_groups),
         "temperature": temperature,
         "early_stopped": epochs_completed < epochs,
     }
@@ -397,6 +487,87 @@ def _require_binary_labels(
     labels = {label for _, label in examples}
     if labels != {0, 1}:
         raise ValueError(f"{split_name} examples must contain both label classes")
+
+
+def _validate_structured_indexes(
+    examples: list[tuple[list[str], int]],
+    pairs: list[tuple[int, int]],
+    groups: list[list[int]],
+    split_name: str,
+) -> None:
+    size = len(examples)
+    for negative, positive in pairs:
+        if not 0 <= negative < size or not 0 <= positive < size:
+            raise ValueError(f"{split_name} pair index is outside the dataset")
+        if examples[negative][1] != 0 or examples[positive][1] != 1:
+            raise ValueError(f"{split_name} pairs must be ordered negative, positive")
+    for group in groups:
+        if len(group) < 2 or any(not 0 <= index < size for index in group):
+            raise ValueError(f"{split_name} consistency group is invalid")
+
+
+def _structured_loss(
+    logits: Tensor,
+    pairs: list[tuple[int, int]],
+    groups: list[list[int]],
+    *,
+    pair_margin: float,
+    pair_weight: float,
+    consistency_weight: float,
+) -> Tensor:
+    scores = logits[:, 1] - logits[:, 0]
+    terms: list[Tensor] = []
+    if pairs and pair_weight:
+        negative = torch.tensor([item[0] for item in pairs], device=logits.device)
+        positive = torch.tensor([item[1] for item in pairs], device=logits.device)
+        gaps = scores[positive] - scores[negative]
+        terms.append(pair_weight * torch.relu(pair_margin - gaps).mean())
+    if groups and consistency_weight:
+        drifts = []
+        for group in groups:
+            selected = scores[torch.tensor(group, device=logits.device)]
+            drifts.append(((selected - selected.mean()) ** 2).mean())
+        terms.append(consistency_weight * torch.stack(drifts).mean())
+    return sum(terms, start=logits.sum() * 0.0)
+
+
+def _structured_metrics(
+    logits: Tensor,
+    pairs: list[tuple[int, int]],
+    groups: list[list[int]],
+    *,
+    temperature: float = 1.0,
+) -> dict[str, float]:
+    probabilities = torch.softmax(logits / temperature, dim=-1)[:, 1]
+    metrics: dict[str, float] = {}
+    if pairs:
+        gaps = torch.stack(
+            [
+                probabilities[positive] - probabilities[negative]
+                for negative, positive in pairs
+            ]
+        )
+        metrics.update(
+            {
+                "pair_ordering_accuracy": float((gaps > 0).float().mean()),
+                "pair_probability_gap_mean": float(gaps.mean()),
+                "pair_probability_gap_min": float(gaps.min()),
+            }
+        )
+    if groups:
+        drifts = torch.stack(
+            [
+                probabilities[group].max() - probabilities[group].min()
+                for group in groups
+            ]
+        )
+        metrics.update(
+            {
+                "semantic_variant_drift_mean": float(drifts.mean()),
+                "semantic_variant_drift_max": float(drifts.max()),
+            }
+        )
+    return metrics
 
 
 def _batch_tensors(

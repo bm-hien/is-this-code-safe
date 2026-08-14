@@ -904,15 +904,21 @@ export function analyzeSource(source, fileName = "sample.py") {
     ? predictMicroDetails(modelTokens)
     : null;
   const modelProbability = modelResult?.probability ?? null;
+  const modelSupported = modelResult?.supported ?? null;
   const modelUsed =
-    modelConsulted && ruleScore >= 20 && ruleScore <= 80;
+    modelConsulted &&
+    modelSupported &&
+    ruleScore >= 20 &&
+    ruleScore <= 80;
   const modelGate = !modelConsulted
     ? "unavailable"
-    : modelUsed
-      ? "inside"
-      : ruleScore < 20
-        ? "below"
-        : "above";
+    : !modelSupported
+      ? "abstained"
+      : modelUsed
+        ? "inside"
+        : ruleScore < 20
+          ? "below"
+          : "above";
   const fusedScore = modelUsed
     ? 100 * (0.65 * (ruleScore / 100) + 0.35 * modelProbability)
     : ruleScore;
@@ -942,6 +948,11 @@ export function analyzeSource(source, fileName = "sample.py") {
       used: modelUsed,
       gate: modelGate,
       probability: modelProbability,
+      supported: modelSupported,
+      abstained: modelResult?.abstained ?? false,
+      tokenCoverage: modelResult?.tokenCoverage ?? null,
+      nearestSimilarity: modelResult?.nearestSimilarity ?? null,
+      unknownTokens: modelResult?.unknownTokens ?? [],
       windows: modelResult?.windows ?? 0,
       tokensEvaluated: modelResult?.tokensEvaluated ?? 0,
       truncated: modelResult?.truncated ?? false,
@@ -957,6 +968,11 @@ export function analyzeSource(source, fileName = "sample.py") {
     warnings: [
       "Browser demo uses the MalIR-Lite lexical frontend; install the Python CLI for AST-accurate analysis.",
       "A low-signal result is not proof that code is safe.",
+      ...(modelResult?.abstained
+        ? [
+            "µMal abstained because these semantic tokens are outside its declared training support; the deterministic capability score was left unchanged.",
+          ]
+        : []),
       ...(modelResult?.truncated
         ? ["The bounded model window limit was reached; rules still evaluated all extracted events."]
         : []),

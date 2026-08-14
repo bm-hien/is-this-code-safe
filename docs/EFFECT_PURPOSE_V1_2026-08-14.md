@@ -81,16 +81,17 @@ identifiers no longer become unrelated hashed vocabulary entries. Effect and
 purpose tokens are appended after normalized events and motifs. Repeated
 semantic events are compacted before bounded-window inference.
 
-The bundled V2 checkpoint trains on 60 rows from 20 behavior groups and
-selects its epoch on 30 rows from 10 disjoint synthetic validation groups. The
+The bundled V3 checkpoint trains on 72 rows from 24 behavior groups and
+selects its epoch on 36 rows from 12 disjoint synthetic validation groups. The
 loader rejects group or exact model-visible representation leakage. The
 checkpoint and browser manifest declare
-`feature_schema = malir.effect-context.v2`,
+`feature_schema = malir.effect-context.v3`,
 `calibration = temperature-scaled-validation`, and
-`validation_kind = synthetic-group-disjoint`. The fitted conservative
-temperature is 1.0. These mechanics and validation results are not a
-real-world security claim; see
-[MICRO_TRAINING_V2_2026-08-14.md](MICRO_TRAINING_V2_2026-08-14.md).
+`validation_kind = synthetic-group-disjoint-paired-effects`. V3 also binds
+its training-support profile to the checkpoint so unsupported semantic context
+cannot affect the capability score. These mechanics and validation results are
+not a real-world security claim; see
+[MICRO_TRAINING_V3_2026-08-14.md](MICRO_TRAINING_V3_2026-08-14.md).
 
 ## Research basis and limits
 
@@ -108,9 +109,10 @@ This design follows several complementary ideas:
   motivates conservative semantic approximation without executing a program.
 - [Limits of static malware analysis](https://sites.cs.ucsb.edu/~chris/research/doc/acsac07_limits.pdf)
   explain why obfuscation and dynamic behavior prevent complete conclusions.
-- [SelectiveNet](https://proceedings.mlr.press/v97/geifman19a.html) provides a
-  risk/coverage basis for future abstention, but the current synthetic corpus
-  cannot calibrate that gate.
+- [SelectiveNet](https://proceedings.mlr.press/v97/geifman19a.html) motivates
+  explicit abstention and risk/coverage reporting. V3 implements only a
+  deterministic training-support boundary; the synthetic corpus cannot
+  calibrate real-world selective risk.
 
 Effect-aware v1 is a false-positive regression and representation change, not a
 validated intent classifier. The next locked experiment needs a real,

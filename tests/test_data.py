@@ -4,6 +4,7 @@ import pytest
 
 from malir.data import load_examples, load_training_dataset
 from malir.model_tokens import canonicalize_model_tokens
+from malir.support import assess_model_support, build_support_profile
 
 
 def test_dataset_path_cannot_escape_manifest_directory(tmp_path):
@@ -85,6 +86,46 @@ def test_v2_training_dataset_is_group_and_representation_disjoint():
     )
     assert len(dataset.dataset_sha256) == 64
     assert len(dataset.split_fingerprint) == 64
+
+
+def test_v3_training_dataset_adds_paired_effect_roles():
+    dataset = load_training_dataset("examples/micro_train_v3.jsonl")
+
+    assert len(dataset.train) == 72
+    assert len(dataset.validation) == 36
+    assert len({row.group_id for row in dataset.train}) == 24
+    assert len({row.group_id for row in dataset.validation}) == 12
+    assert len({row.pair_id for row in dataset.train if row.pair_id}) == 7
+    assert len({row.pair_id for row in dataset.validation if row.pair_id}) == 6
+    assert sum(row.pair_id is not None for row in dataset.all_examples) == 78
+    assert any(
+        "MOTIF:file_to_network" in row.tokens for row in dataset.train if row.label == 0
+    )
+
+    profile = build_support_profile(
+        (row.tokens for row in dataset.train),
+        (row.group_id for row in dataset.train),
+    )
+    assert all(
+        assess_model_support(row.tokens, profile).supported
+        for row in dataset.validation
+    )
+    obfuscator_context = [
+        "FILE",
+        "P:runtime|C:context|O:IMPORT|T:generic",
+        "P:import|C:source|O:ENV_READ|T:generic",
+        "P:import|C:sink|O:DYNAMIC_EXEC|T:generic",
+        "EFFECT:ENTRY:import_time_effects",
+        "EFFECT:FLOW:local_file_to_local_artifact",
+        "EFFECT:TRANSFORM:code_generation",
+    ]
+    assert assess_model_support(obfuscator_context, profile).supported
+
+    with open("examples/micro_ood_v3.jsonl", encoding="utf-8") as handle:
+        probes = [json.loads(line) for line in handle if line.strip()]
+    assert all(
+        assess_model_support(probe["tokens"], profile).abstained for probe in probes
+    )
 
 
 def test_training_dataset_rejects_group_leakage(tmp_path):

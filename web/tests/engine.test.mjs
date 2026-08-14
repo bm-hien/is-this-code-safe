@@ -62,14 +62,34 @@ test("full browser artifact matches the checkpoint architecture", () => {
   assert.equal(FULL_MODEL_MANIFEST.metadata.parameters, 567_746);
   assert.equal(
     FULL_MODEL_MANIFEST.metadata.feature_schema,
-    "malir.effect-context.v2",
+    "malir.effect-context.v3",
   );
-  assert.equal(FULL_MODEL_MANIFEST.metadata.training_examples, 60);
-  assert.equal(FULL_MODEL_MANIFEST.metadata.training_groups, 20);
-  assert.equal(FULL_MODEL_MANIFEST.metadata.validation_examples, 30);
-  assert.equal(FULL_MODEL_MANIFEST.metadata.validation_groups, 10);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.training_examples, 72);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.training_groups, 24);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.validation_examples, 36);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.validation_groups, 12);
   assert.equal(FULL_MODEL_MANIFEST.metadata.seed, 29);
-  assert.ok(FULL_MODEL_MANIFEST.metadata.validation_metrics.nll < 0.08);
+  assert.ok(FULL_MODEL_MANIFEST.metadata.validation_metrics.nll < 0.04);
+  assert.equal(
+    FULL_MODEL_MANIFEST.metadata.validation_metrics.pair_ordering_accuracy,
+    1,
+  );
+  assert.ok(
+    FULL_MODEL_MANIFEST.metadata.validation_metrics.pair_probability_gap_min >
+      0.8,
+  );
+  assert.ok(
+    FULL_MODEL_MANIFEST.metadata.validation_metrics.semantic_variant_drift_max <
+      0.08,
+  );
+  assert.equal(
+    FULL_MODEL_MANIFEST.metadata.structured_objective.pair_constraints,
+    21,
+  );
+  assert.equal(
+    FULL_MODEL_MANIFEST.metadata.structured_objective.consistency_groups,
+    24,
+  );
   assert.equal(
     FULL_MODEL_MANIFEST.metadata.calibration,
     "temperature-scaled-validation",
@@ -77,14 +97,38 @@ test("full browser artifact matches the checkpoint architecture", () => {
   assert.ok(FULL_MODEL_MANIFEST.metadata.temperature >= 1);
   assert.equal(
     FULL_MODEL_MANIFEST.metadata.validation_kind,
-    "synthetic-group-disjoint",
+    "synthetic-group-disjoint-paired-effects",
   );
+  assert.equal(
+    FULL_MODEL_MANIFEST.support_profile.schema,
+    "malir.support-profile.v1",
+  );
+  assert.equal(FULL_MODEL_MANIFEST.support_profile.prototypes.length, 24);
+  assert.equal(FULL_MODEL_MANIFEST.support_profile.min_token_coverage, 1);
+  assert.equal(FULL_MODEL_MANIFEST.support_profile.min_nearest_jaccard, 0.2);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.support_prototypes, 24);
   assert.equal(FULL_MODEL_MANIFEST.config.n_layers, 2);
   assert.equal(FULL_MODEL_MANIFEST.config.n_heads, 4);
   assert.equal(FULL_MODEL_MANIFEST.config.d_model, 96);
   assert.equal(FULL_MODEL_MANIFEST.binary.bytes, modelBytes.byteLength);
   assert.equal(getFullModelStatus().binaryBytes, modelBytes.byteLength);
 });
+
+test("browser rejects a malformed training-support profile", () => {
+  const invalid = {
+    ...FULL_MODEL_MANIFEST,
+    support_profile: {
+      ...FULL_MODEL_MANIFEST.support_profile,
+      known_tokens: [],
+    },
+  };
+
+  assert.throws(
+    () => installFullModel(invalid, modelBuffer),
+    /support profile/i,
+  );
+});
+
 
 test("browser inference matches PyTorch smoke vectors", () => {
   for (const vector of FULL_MODEL_MANIFEST.smoke_vectors) {
@@ -105,6 +149,43 @@ test("windowed browser inference evaluates tokens beyond one context", () => {
   assert.equal(result.tokensEvaluated, tokens.length);
   assert.equal(result.truncated, false);
   assert.ok(result.probability >= 0 && result.probability <= 1);
+  assert.equal(result.supported, false);
+  assert.equal(result.abstained, true);
+});
+
+
+test("unknown MalIR tokens force support abstention", () => {
+  const result = predictMicroDetails([
+    "FILE",
+    "P:runtime|C:source|O:CAMERA_READ|T:generic",
+    "EFFECT:ENTRY:library_callable",
+    "EFFECT:ORIGIN:camera",
+  ]);
+
+  assert.equal(result.supported, false);
+  assert.equal(result.abstained, true);
+  assert.ok(result.tokenCoverage < 1);
+  assert.ok(
+    result.unknownTokens.includes(
+      "P:runtime|C:source|O:CAMERA_READ|T:generic",
+    ),
+  );
+});
+
+
+test("declared V3 support probes all abstain", () => {
+  const rows = readFileSync(
+    new URL("../../examples/micro_ood_v3.jsonl", import.meta.url),
+    "utf8",
+  )
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  const results = rows.map((row) => predictMicroDetails(row.tokens));
+
+  assert.ok(results.every((result) => result.abstained));
+  assert.ok(results.every((result) => !result.supported));
+  assert.ok(results.some((result) => result.probability > 0.8));
 });
 
 
@@ -116,6 +197,8 @@ test("benign demo remains low signal", () => {
   assert.equal(report.model.consulted, true);
   assert.equal(report.model.used, false);
   assert.equal(report.model.gate, "below");
+  assert.equal(report.model.supported, true);
+  assert.equal(report.model.abstained, false);
   assert.equal(typeof report.model.probability, "number");
   assert.equal(report.riskScore, report.ruleScore);
 });
@@ -126,6 +209,7 @@ test("exfiltration demo produces line evidence and uses full µMal", () => {
   assert.ok(report.riskScore >= 50);
   assert.equal(report.model.loaded, true);
   assert.equal(report.model.used, true);
+  assert.equal(report.model.supported, true);
   assert.ok(report.model.probability > 0.5);
   assert.ok(
     report.modelTokens.some((token) =>

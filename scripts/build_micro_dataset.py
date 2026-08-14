@@ -410,9 +410,9 @@ VARIANTS = (
 )
 
 
-def build_records() -> list[dict]:
+def build_records(scenarios: list[dict] | None = None) -> list[dict]:
     records = []
-    for item in SCENARIOS:
+    for item in SCENARIOS if scenarios is None else scenarios:
         for suffix, additions in VARIANTS:
             record = {
                 "sample_id": f"{item['id']}--{suffix}",

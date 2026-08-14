@@ -1,0 +1,4 @@
+{"case_id":"unknown-camera-source","expected":"abstain","tokens":["FILE","P:runtime|C:source|O:CAMERA_READ|T:generic","EFFECT:ENTRY:library_callable","EFFECT:ORIGIN:camera"]}
+{"case_id":"unknown-mining-sink","expected":"abstain","tokens":["FILE","P:runtime|C:sink|O:CRYPTO_MINE|T:generic","EFFECT:ENTRY:library_callable","PURPOSE:cryptocurrency_mining"]}
+{"case_id":"unknown-transform-purpose","expected":"abstain","tokens":["FILE","P:runtime|C:transform|O:UNKNOWN_TRANSFORM|T:generic","EFFECT:TRANSFORM:future_codec","PURPOSE:future_role"]}
+{"case_id":"future-language-operation","expected":"abstain","tokens":["FILE","P:runtime|C:sink|O:FFI_UNSAFE_CALL|T:generic","EFFECT:ENTRY:library_callable"]}

@@ -142,6 +142,41 @@ function requiredTensorNames(layerCount) {
   return names;
 }
 
+function validateSupportProfile(profile) {
+  if (profile == null) return;
+  if (
+    profile.schema !== "malir.support-profile.v1" ||
+    !Array.isArray(profile.known_tokens) ||
+    !profile.known_tokens.length ||
+    profile.known_tokens.some(
+      (token) => typeof token !== "string" || !token,
+    ) ||
+    !Array.isArray(profile.prototypes) ||
+    !profile.prototypes.length
+  ) {
+    throw new Error("Model support profile is invalid.");
+  }
+  for (const prototype of profile.prototypes) {
+    if (
+      typeof prototype?.group_id !== "string" ||
+      !prototype.group_id ||
+      !Array.isArray(prototype.tokens) ||
+      !prototype.tokens.length ||
+      prototype.tokens.some(
+        (token) => typeof token !== "string" || !token,
+      )
+    ) {
+      throw new Error("Model support prototype is invalid.");
+    }
+  }
+  for (const name of ["min_token_coverage", "min_nearest_jaccard"]) {
+    const value = Number(profile[name]);
+    if (!Number.isFinite(value) || value < 0 || value > 1) {
+      throw new Error("Model support threshold is invalid: " + name);
+    }
+  }
+}
+
 function validateManifest(manifest, buffer) {
   if (!manifest || manifest.schema !== "itcs.browser-full-model.v1") {
     throw new Error("Unsupported browser model manifest.");
@@ -171,6 +206,7 @@ function validateManifest(manifest, buffer) {
   if (!Number.isFinite(temperature) || temperature <= 0) {
     throw new Error("Model calibration temperature is invalid.");
   }
+  validateSupportProfile(manifest.support_profile);
   for (const name of requiredTensorNames(config.n_layers)) {
     const descriptor = manifest.tensors[name];
     if (!descriptor) throw new Error("Model tensor is missing: " + name);
@@ -496,6 +532,53 @@ function runModel(identifiers) {
   return suspicious / (clean + suspicious);
 }
 
+function jaccard(left, right) {
+  const union = new Set([...left, ...right]);
+  if (!union.size) return 1;
+  let intersection = 0;
+  for (const token of left) {
+    if (right.has(token)) intersection += 1;
+  }
+  return intersection / union.size;
+}
+
+function assessSupport(tokens) {
+  const profile = activeModel.manifest.support_profile;
+  if (!profile) {
+    return {
+      supported: true,
+      abstained: false,
+      tokenCoverage: 1,
+      nearestSimilarity: 1,
+      unknownTokens: [],
+    };
+  }
+  const observed = new Set(tokens);
+  const known = new Set(profile.known_tokens);
+  const unknownTokens = [...observed].filter((token) => !known.has(token)).sort();
+  const tokenCoverage = observed.size
+    ? (observed.size - unknownTokens.length) / observed.size
+    : 0;
+  let nearestSimilarity = 0;
+  for (const prototype of profile.prototypes) {
+    nearestSimilarity = Math.max(
+      nearestSimilarity,
+      jaccard(observed, new Set(prototype.tokens)),
+    );
+  }
+  const supported =
+    observed.size > 0 &&
+    tokenCoverage >= profile.min_token_coverage &&
+    nearestSimilarity >= profile.min_nearest_jaccard;
+  return {
+    supported,
+    abstained: !supported,
+    tokenCoverage,
+    nearestSimilarity,
+    unknownTokens,
+  };
+}
+
 export function predictFullModelDetails(tokens) {
   if (!activeModel) {
     throw new Error("Download the full µMal model before analysis.");
@@ -522,6 +605,7 @@ export function predictFullModelDetails(tokens) {
     windows: probabilities.length,
     tokensEvaluated: Math.min(tokens.length, covered),
     truncated: covered < tokens.length,
+    ...assessSupport(tokens),
   };
 }
 

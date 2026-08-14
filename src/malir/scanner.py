@@ -101,6 +101,11 @@ class Scanner:
                 warnings.append(f"cannot read {path}: {error}")
 
         decision = decide(analyses, self.model, self.cascade)
+        if decision.model_abstained:
+            warnings.append(
+                "µMal abstained because the semantic tokens are outside "
+                "its declared training support"
+            )
         elapsed = (time.perf_counter() - started) * 1_000.0
         return ScanReport(
             target=str(root),
@@ -110,6 +115,11 @@ class Scanner:
             model_probability=decision.model_probability,
             model_consulted=decision.model_consulted,
             model_used=decision.model_used,
+            model_supported=decision.model_supported,
+            model_abstained=decision.model_abstained,
+            model_token_coverage=decision.model_token_coverage,
+            model_nearest_similarity=decision.model_nearest_similarity,
+            model_unknown_tokens=decision.model_unknown_tokens,
             files_scanned=len(analyses),
             files_skipped=skipped,
             elapsed_ms=elapsed,

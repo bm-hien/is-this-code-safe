@@ -130,8 +130,8 @@ the Python CLI. It is a local Transformer encoder, not a remote LLM call:
 | Hashed vocabulary | 4,096 |
 | Trainable parameters | 567,746 |
 | On-demand float32 binary | 2,270,984 bytes |
-| Training split | 60 rows / 20 synthetic behavior groups |
-| Validation split | 30 rows / 10 disjoint synthetic behavior groups |
+| Training split | 72 rows / 24 synthetic behavior groups |
+| Validation split | 36 rows / 12 disjoint synthetic behavior groups |
 
 The binary omits only the duplicate serialized language-model head because it
 is tied to the token embedding and is not used by browser classification.
@@ -150,17 +150,25 @@ After the checkpoint has been downloaded, every analysis consults µMal and
 shows its probability. Inside the 20–80 gate, fusion is 65% capability and 35%
 model probability, followed by `risk = max(capability, fused)`. The model may
 raise an ambiguous decision but cannot lower concrete capability. Outside the
-gate its probability is advisory; the UI no longer calls this state “gated
-off.” JSON reports the gate state, window count, evaluated-token count, and
-whether input hit the window bound.
+gate its probability is advisory.
 
-The V2 corpus is designed only to test group-disjoint training mechanics,
-effect-role hard negatives, and browser/PyTorch parity. The manifest declares
+V3 also checks every compacted sequence against a checkpoint-bound support
+profile: exact train-token coverage plus nearest train-group Jaccard similarity.
+Unknown MalIR tokens or a similarity below 0.20 produce `gate = abstained`.
+The probability remains in JSON for audit, while fusion is disabled and the
+deterministic capability score is unchanged. This is a conservative support
+boundary, not a claim that distance detects all out-of-distribution programs.
+JSON reports support, coverage, nearest similarity, unknown tokens, gate state,
+window count, evaluated-token count, and whether input hit the window bound.
+
+The V3 corpus is designed only to test group-disjoint training mechanics,
+paired effect roles, semantic-context consistency, support abstention, and
+browser/PyTorch parity. The manifest declares
 `calibration = temperature-scaled-validation` and
-`validation_kind = synthetic-group-disjoint`; its fitted temperature is 1.0.
-The validation set was used for epoch/seed selection and is not a test set.
-These results, semantic saturation, and windowing are not detection-accuracy
-claims. See [MICRO_TRAINING_V2_2026-08-14.md](MICRO_TRAINING_V2_2026-08-14.md).
+`validation_kind = synthetic-group-disjoint-paired-effects`. The validation
+set was used for epoch/seed selection and is not a test set. These results,
+semantic saturation, support checks, and windowing are not detection-accuracy
+claims. See [MICRO_TRAINING_V3_2026-08-14.md](MICRO_TRAINING_V3_2026-08-14.md).
 Real claims require project/family-disjoint, time-aware evaluation under
 [EVALUATION_PROTOCOL.md](EVALUATION_PROTOCOL.md).
 

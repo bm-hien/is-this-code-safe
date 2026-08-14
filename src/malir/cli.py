@@ -442,8 +442,10 @@ def _print_report(report) -> None:
     )
     if report.model_probability is None:
         model_state = "unavailable"
+    elif report.model_abstained:
+        model_state = f"{report.model_probability:.3f} (abstained; audit only)"
     elif report.model_used:
-        model_state = f"{report.model_probability:.3f} (contributed)"
+        model_state = f"{report.model_probability:.3f} (fusion evaluated)"
     else:
         model_state = f"{report.model_probability:.3f} (advisory only)"
     print(f"rule score {report.rule_score:.1f} | model {model_state}")

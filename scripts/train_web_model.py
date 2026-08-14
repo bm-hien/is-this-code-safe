@@ -13,8 +13,9 @@ from typing import Any
 import numpy as np
 import torch
 
-from malir.data import load_training_dataset
+from malir.data import DatasetExample, load_training_dataset
 from malir.microlm import HashedTokenizer, MicroConfig, MicroMal, train_micro
+from malir.support import build_support_profile
 
 SMOKE_TOKENS = (
     (
@@ -39,6 +40,46 @@ SMOKE_TOKENS = (
         "PURPOSE:sensitive_data_transfer",
     ),
 )
+
+
+def _variant_name(sample_id: str) -> str:
+    return sample_id.rsplit("--", 1)[-1]
+
+
+def _structured_indexes(
+    examples: tuple[DatasetExample, ...],
+) -> tuple[list[tuple[int, int]], list[list[int]]]:
+    groups: dict[str, list[int]] = {}
+    paired: dict[tuple[str, int, str], int] = {}
+    pair_ids: set[str] = set()
+    for index, example in enumerate(examples):
+        groups.setdefault(example.group_id, []).append(index)
+        if example.pair_id is None:
+            continue
+        pair_ids.add(example.pair_id)
+        key = (example.pair_id, example.label, _variant_name(example.sample_id))
+        if key in paired:
+            raise ValueError(f"duplicate paired variant: {key}")
+        paired[key] = index
+
+    constraints = []
+    for pair_id in sorted(pair_ids):
+        negative = {
+            variant: index
+            for (current, label, variant), index in paired.items()
+            if current == pair_id and label == 0
+        }
+        positive = {
+            variant: index
+            for (current, label, variant), index in paired.items()
+            if current == pair_id and label == 1
+        }
+        if not negative or negative.keys() != positive.keys():
+            raise ValueError(f"incomplete semantic pair: {pair_id}")
+        constraints.extend(
+            (negative[variant], positive[variant]) for variant in sorted(negative)
+        )
+    return constraints, [groups[name] for name in sorted(groups)]
 
 
 def _tensor_names(layer_count: int) -> list[str]:
@@ -141,8 +182,10 @@ def export_checkpoint(
     binary_tmp = binary_path.with_suffix(binary_path.suffix + ".tmp")
     binary_tmp.write_bytes(payload)
     binary_tmp.replace(binary_path)
+    support_profile = checkpoint_metadata.get("support_profile")
     manifest = {
         "schema": "itcs.browser-full-model.v1",
+        "support_profile": support_profile,
         "metadata": {
             "name": "µMal Full",
             "architecture": (
@@ -164,6 +207,16 @@ def export_checkpoint(
             "validation_examples": checkpoint_metadata.get("validation_examples"),
             "validation_groups": checkpoint_metadata.get("validation_groups"),
             "validation_metrics": checkpoint_metadata.get("validation_metrics"),
+            "training_metrics": checkpoint_metadata.get("training_metrics"),
+            "structured_objective": checkpoint_metadata.get("structured_objective"),
+            "training_roles": checkpoint_metadata.get("training_roles"),
+            "validation_roles": checkpoint_metadata.get("validation_roles"),
+            "support_schema": (
+                support_profile.get("schema") if support_profile else None
+            ),
+            "support_prototypes": (
+                len(support_profile.get("prototypes", ())) if support_profile else 0
+            ),
             "temperature": checkpoint_metadata.get("temperature", 1.0),
             "calibration": checkpoint_metadata.get("calibration", "unknown"),
             "validation_kind": checkpoint_metadata.get("validation_kind"),
@@ -230,7 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dataset",
         type=Path,
-        default=Path("examples/micro_train_v2.jsonl"),
+        default=Path("examples/micro_train_v3.jsonl"),
     )
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--batch-size", type=int, default=8)
@@ -240,6 +293,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--minimum-epochs", type=int, default=12)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--label-smoothing", type=float, default=0.05)
+    parser.add_argument("--pair-margin", type=float, default=1.0)
+    parser.add_argument("--pair-weight", type=float, default=0.15)
+    parser.add_argument("--consistency-weight", type=float, default=0.05)
+    parser.add_argument("--min-token-coverage", type=float, default=1.0)
+    parser.add_argument("--min-nearest-jaccard", type=float, default=0.2)
     return parser
 
 
@@ -248,6 +306,14 @@ def main() -> None:
     training = None
     if args.train:
         dataset = load_training_dataset(args.dataset)
+        train_pairs, train_groups = _structured_indexes(dataset.train)
+        validation_pairs, validation_groups = _structured_indexes(dataset.validation)
+        support_profile = build_support_profile(
+            (example.tokens for example in dataset.train),
+            (example.group_id for example in dataset.train),
+            min_token_coverage=args.min_token_coverage,
+            min_nearest_jaccard=args.min_nearest_jaccard,
+        )
         training = train_micro(
             [example.as_pair() for example in dataset.train],
             args.checkpoint,
@@ -259,16 +325,25 @@ def main() -> None:
             threads=args.threads,
             seed=args.seed,
             validation_examples=[example.as_pair() for example in dataset.validation],
+            pair_constraints=train_pairs,
+            validation_pair_constraints=validation_pairs,
+            consistency_groups=train_groups,
+            validation_consistency_groups=validation_groups,
+            pair_margin=args.pair_margin,
+            pair_weight=args.pair_weight,
+            consistency_weight=args.consistency_weight,
             patience=args.patience,
             minimum_epochs=args.minimum_epochs,
             checkpoint_metadata={
+                "feature_schema": "malir.effect-context.v3",
                 "dataset_sha256": dataset.dataset_sha256,
                 "split_fingerprint": dataset.split_fingerprint,
-                "training_groups": len({example.group_id for example in dataset.train}),
-                "validation_groups": len(
-                    {example.group_id for example in dataset.validation}
-                ),
-                "validation_kind": "synthetic-group-disjoint",
+                "training_groups": len(train_groups),
+                "validation_groups": len(validation_groups),
+                "training_roles": sorted({row.role for row in dataset.train}),
+                "validation_roles": sorted({row.role for row in dataset.validation}),
+                "validation_kind": "synthetic-group-disjoint-paired-effects",
+                "support_profile": support_profile,
             },
         )
     if not args.checkpoint.is_file():

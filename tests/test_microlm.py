@@ -3,6 +3,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from malir.microlm import HashedTokenizer, MicroConfig, MicroMalPredictor, train_micro
+from malir.support import build_support_profile
 
 
 def test_micro_model_trains_saves_and_loads(tmp_path):
@@ -111,3 +112,52 @@ def test_micro_training_uses_disjoint_validation_for_calibration(tmp_path):
     assert result["temperature"] >= 1.0
     assert stored["metadata"]["calibration"] == "temperature-scaled-validation"
     assert predictor.temperature == result["temperature"]
+
+
+def test_micro_training_records_paired_semantic_metrics_and_support(tmp_path):
+    training = [
+        (["FILE", "O:FILE_READ"], 0),
+        (["FILE", "O:FILE_READ", "EFFECT:ENTRY:explicit_cli"], 0),
+        (["FILE", "O:NETWORK_SEND"], 1),
+        (["FILE", "O:NETWORK_SEND", "EFFECT:ENTRY:explicit_cli"], 1),
+    ]
+    profile = build_support_profile(
+        (tokens for tokens, _label in training),
+        ["negative", "negative", "positive", "positive"],
+    )
+    checkpoint = tmp_path / "structured.pt"
+    result = train_micro(
+        training,
+        checkpoint,
+        config=MicroConfig(
+            vocab_size=128,
+            max_length=16,
+            d_model=16,
+            n_heads=2,
+            n_layers=1,
+            ffn_dim=32,
+            dropout=0.0,
+        ),
+        validation_examples=training,
+        pair_constraints=[(0, 2), (1, 3)],
+        validation_pair_constraints=[(0, 2), (1, 3)],
+        consistency_groups=[[0, 1], [2, 3]],
+        validation_consistency_groups=[[0, 1], [2, 3]],
+        checkpoint_metadata={
+            "feature_schema": "malir.effect-context.v3",
+            "support_profile": profile,
+        },
+        epochs=2,
+        batch_size=4,
+        mlm_weight=0.0,
+        threads=1,
+    )
+
+    predictor = MicroMalPredictor.load(checkpoint, threads=1)
+    known = predictor.predict_details(["FILE", "O:FILE_READ"])
+    unknown = predictor.predict_details(["FILE", "O:CAMERA_READ"])
+    assert result["pair_constraints"] == 2
+    assert "pair_ordering_accuracy" in result["validation_metrics"]
+    assert "semantic_variant_drift_max" in result["validation_metrics"]
+    assert known["supported"] is True
+    assert unknown["abstained"] is True

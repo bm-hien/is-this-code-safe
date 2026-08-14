@@ -238,7 +238,9 @@ function renderReport(report) {
   elements.verdictBadge.textContent = report.verdict;
   elements.ruleScore.textContent = report.ruleScore.toFixed(0) + " / 100";
   elements.modelScore.textContent = model.consulted
-    ? (model.probability * 100).toFixed(1) + "%"
+    ? (model.probability * 100).toFixed(1) +
+      "%" +
+      (model.abstained ? " audit" : "")
     : "not loaded";
   elements.latency.textContent = report.elapsedMs.toFixed(1) + " ms";
   setGauge(report.riskScore);
@@ -252,7 +254,18 @@ function renderReport(report) {
         ? "temperature-scaled on group-disjoint synthetic validation"
         : "uncalibrated";
     elements.modelTitle.textContent = metadata.name + " consulted";
-    if (model.used) {
+    if (model.abstained) {
+      const coveragePercent = (model.tokenCoverage * 100).toFixed(0) + "%";
+      const nearestPercent = (model.nearestSimilarity * 100).toFixed(0) + "%";
+      elements.modelTitle.textContent = metadata.name + " abstained";
+      elements.modelCopy.textContent =
+        metadata.parameters.toLocaleString() +
+        " parameters · probability shown only for audit · token coverage " +
+        coveragePercent +
+        " · nearest trained behavior " +
+        nearestPercent +
+        "; unsupported semantic context cannot raise the capability score";
+    } else if (model.used) {
       elements.modelCopy.textContent =
         metadata.parameters.toLocaleString() +
         " parameters · " +

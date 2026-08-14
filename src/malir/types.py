@@ -172,6 +172,11 @@ class ScanReport:
     model_probability: float | None
     model_consulted: bool
     model_used: bool
+    model_supported: bool | None
+    model_abstained: bool
+    model_token_coverage: float | None
+    model_nearest_similarity: float | None
+    model_unknown_tokens: list[str]
     files_scanned: int
     files_skipped: int
     elapsed_ms: float
@@ -200,6 +205,19 @@ class ScanReport:
             ),
             "model_consulted": self.model_consulted,
             "model_used": self.model_used,
+            "model_supported": self.model_supported,
+            "model_abstained": self.model_abstained,
+            "model_token_coverage": (
+                None
+                if self.model_token_coverage is None
+                else round(self.model_token_coverage, 6)
+            ),
+            "model_nearest_similarity": (
+                None
+                if self.model_nearest_similarity is None
+                else round(self.model_nearest_similarity, 6)
+            ),
+            "model_unknown_tokens": self.model_unknown_tokens,
             "files_scanned": self.files_scanned,
             "files_skipped": self.files_skipped,
             "elapsed_ms": round(self.elapsed_ms, 3),

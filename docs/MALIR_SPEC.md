@@ -147,11 +147,12 @@ dynamic dispatch, decorators, exceptions, or other modules. Every path keeps
 its supporting real event indexes for review; the internal call-boundary marker
 is never serialized. Path tokens remain `MOTIF:<name>` regardless of evidence
 kind. Effect context changes the model-visible sequence. The current checkpoint
-declares `feature_schema = malir.effect-context.v2`; V2 adds a leakage-audited
-group-disjoint training contract and validation metadata without changing the
-event vocabulary. Older V1 checkpoints remain loadable but do not carry those
-training guarantees. See
-[MICRO_TRAINING_V2_2026-08-14.md](MICRO_TRAINING_V2_2026-08-14.md).
+declares `feature_schema = malir.effect-context.v3`; V3 adds controlled
+benign/positive effect pairs, a pair-ranking objective, variant consistency,
+and a checkpoint-bound training-support profile without changing the event
+vocabulary. V1/V2 checkpoints remain loadable but do not carry all V3 training
+or abstention guarantees. See
+[MICRO_TRAINING_V3_2026-08-14.md](MICRO_TRAINING_V3_2026-08-14.md).
 
 See [the bounded-summary design note](BOUNDED_CALL_SUMMARIES.md) for its
 research basis, conservative cases, and regression matrix.
@@ -193,8 +194,11 @@ sequence even outside the 20–80 gate, so its probability remains observable fo
 audit. Inside the gate, fusion computes 65% capability plus 35% model
 probability, then applies `risk = max(capability, fused)`. The model can raise an
 ambiguous decision but cannot erase concrete capability evidence. `model_used`
-means the sample entered this fusion gate; `model_consulted` also includes
-advisory inference outside it.
+means a supported sample entered this fusion gate; `model_consulted` also
+includes advisory inference outside it. V3 additionally exposes
+`model_supported`, `model_abstained`, token coverage, nearest train-group
+similarity, and the unknown-token list. An abstained probability remains
+auditable but cannot enter fusion.
 
 µMal evaluates at most 254 behavior tokens plus boundary tokens per window.
 Longer compacted sequences use up to 16 overlapping windows and return the

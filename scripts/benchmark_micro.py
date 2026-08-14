@@ -13,10 +13,17 @@ from pathlib import Path
 from malir.microlm import MicroMalPredictor
 
 TOKENS = [
-    "P:runtime|C:source|O:ENV_READ|T:ci_token",
-    "P:runtime|C:transform|O:ENCODE|T:base64.b64encode",
-    "P:runtime|C:sink|O:NETWORK_SEND|T:remote",
+    "FILE",
+    "P:runtime|C:source|O:ENV_READ|T:sensitive",
+    "P:runtime|C:transform|O:ENCODE|T:generic",
+    "P:runtime|C:sink|O:NETWORK_SEND|T:network",
     "MOTIF:credential_or_file_exfil",
+    "EFFECT:ENTRY:library_callable",
+    "EFFECT:ORIGIN:environment",
+    "EFFECT:DESTINATION:network",
+    "EFFECT:FLOW:sensitive_data_to_network",
+    "EFFECT:TRANSFORM:encoding",
+    "PURPOSE:sensitive_data_transfer",
 ]
 
 

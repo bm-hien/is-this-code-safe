@@ -33,7 +33,7 @@ web-model:
 	$(PYTHON) scripts/train_web_model.py
 
 web-model-train:
-	$(PYTHON) scripts/build_micro_dataset.py
+	$(PYTHON) scripts/build_micro_dataset_v3.py
 	$(PYTHON) scripts/train_web_model.py --train
 
 lint:

@@ -370,13 +370,13 @@ code-learning literature such as
 [ContraCode](https://arxiv.org/abs/2009.02731) motivates consistency training,
 but every transform must be checked not to change the security behavior label.
 
-The bundled [µMal effect-context V2 checkpoint](MICRO_TRAINING_V2_2026-08-14.md)
-implements a mechanics-only version of this gate: 20 synthetic train groups,
-10 representation-disjoint synthetic validation groups, hard counterfactual
-roles, early stopping, label smoothing, and conservative validation-only
-temperature fitting. Seed 29 was selected by validation NLL from seeds 13, 29,
-and 47. This validation set is not a test set, and the result is not evidence
-for real-package efficacy or calibration.
+The bundled [µMal effect-context V3 checkpoint](MICRO_TRAINING_V3_2026-08-14.md)
+implements a mechanics-only version of this gate: 24 synthetic train groups,
+12 representation-disjoint synthetic validation groups, controlled effect
+pairs, pair-ranking and variant-consistency losses, and a deterministic
+training-support abstention boundary. Seed 29 was selected by validation NLL
+from seeds 13, 29, and 47. This validation set is not a test set, and the result
+is not evidence for real-package efficacy, calibration, or OOD detection.
 
 ## 8. Metrics
 
@@ -472,9 +472,9 @@ Default configuration: vocabulary 4,096, maximum length 256, width 96, four
 attention heads, two encoder layers, FFN 192, 567,746 parameters. The benchmark
 uses two Torch threads, ten warmups, and 300 timed single-example predictions.
 
-- V2 FP32 checkpoint: 2,283,661 bytes;
-- median inference: 6.4882 ms;
-- p95 inference: 12.5015 ms;
+- V3 FP32 checkpoint with support metadata: 2,295,949 bytes;
+- three 300-prediction runs: median 4.2622–4.4685 ms;
+- those runs' p95: 10.3704–15.9237 ms;
 - optional PyTorch training environment: 992 MB on disk.
 
 A probe of legacy torch.ao dynamic linear quantization was not adopted: the
@@ -483,26 +483,28 @@ TransformerEncoder failed during inference. The supported FP32 path remains
 small and fast; INT8 work should target torchao or ONNX Runtime and must beat
 this measured baseline before inclusion.
 
-The V2 checkpoint trains on 60 rows from 20 groups, selects its epoch and seed
-on 30 rows from 10 group- and representation-disjoint synthetic validation
-groups, and records NLL/Brier/ECE plus a conservative temperature. Seed 29
-reached 30/30 validation-row accuracy with NLL 0.074126 and temperature 1.0.
-This controlled validation result demonstrates the training gate and checkpoint
-round-trip only; it says nothing about real-package generalization or
-calibration. See
-[MICRO_TRAINING_V2_2026-08-14.md](MICRO_TRAINING_V2_2026-08-14.md).
+The V3 checkpoint trains on 72 rows from 24 groups, selects its epoch and seed
+on 36 rows from 12 group- and representation-disjoint synthetic validation
+groups, and records NLL/Brier/ECE, pair ordering/gaps, variant drift, and a
+conservative temperature. Seed 29 reached 36/36 validation-row accuracy with
+NLL 0.035035 and temperature 1.0. All 18 validation pair constraints were
+ordered correctly. This controlled result demonstrates the training gate,
+support boundary, and checkpoint round-trip only; it says nothing about
+real-package generalization, calibration, or OOD detection. See
+[MICRO_TRAINING_V3_2026-08-14.md](MICRO_TRAINING_V3_2026-08-14.md).
 
 ### Test state
 
-Two hundred two automated tests currently pass: 181 Python tests and
-21 browser tests. They cover extraction ordering, alias resolution, non-execution,
+Two hundred twelve automated tests currently pass: 188 Python tests and
+24 browser tests. They cover extraction ordering, alias resolution, non-execution,
 syntax errors and warning isolation, deterministic tokens, symlinks and size
 limits, bounded hostile archives, source-set/normalized-AST grouping, local and
 direct-call provenance counterexamples and gating, semantic repeat saturation,
-model-input compaction, multi-window µMal coverage, sparse
-learning/serialization, µMal training/loading, manifest leakage, low-FPR power,
-paired group statistics, CLI JSON, browser evidence fidelity, Monaco wiring and
-fallback, and benchmark output.
+model-input compaction, multi-window µMal coverage, paired objectives,
+training-support abstention, sparse learning/serialization, µMal
+training/loading, manifest leakage, low-FPR power, paired group statistics,
+CLI JSON, browser evidence fidelity, Monaco wiring and fallback, and benchmark
+output.
 
 ## 10. Claim gates
 

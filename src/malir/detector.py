@@ -82,6 +82,11 @@ class Decision:
     model_probability: float | None
     model_consulted: bool
     model_used: bool
+    model_supported: bool | None
+    model_abstained: bool
+    model_token_coverage: float | None
+    model_nearest_similarity: float | None
+    model_unknown_tokens: list[str]
     verdict: str
     evidence: list[Evidence]
 
@@ -179,11 +184,30 @@ def decide(
     probability: float | None = None
     model_consulted = False
     model_used = False
+    model_supported: bool | None = None
+    model_abstained = False
+    model_token_coverage: float | None = None
+    model_nearest_similarity: float | None = None
+    model_unknown_tokens: list[str] = []
     risk_score = rule_score
     if model is not None:
-        probability = model.predict_proba(tokens)
+        details_method = getattr(model, "predict_details", None)
+        if callable(details_method):
+            details = details_method(tokens)
+            probability = float(details["probability"])
+            supported = bool(details.get("supported", True))
+            model_abstained = not supported
+            model_token_coverage = float(details.get("token_coverage", 1.0))
+            model_nearest_similarity = float(details.get("nearest_similarity", 1.0))
+            model_unknown_tokens = [
+                str(token) for token in details.get("unknown_tokens", ())
+            ]
+        else:
+            probability = model.predict_proba(tokens)
+            supported = True
         model_consulted = True
-        if config.low_gate <= rule_score <= config.high_gate:
+        model_supported = supported
+        if supported and config.low_gate <= rule_score <= config.high_gate:
             fused_score = 100.0 * (
                 config.rule_weight * (rule_score / 100.0)
                 + (1.0 - config.rule_weight) * probability
@@ -197,6 +221,11 @@ def decide(
         model_probability=probability,
         model_consulted=model_consulted,
         model_used=model_used,
+        model_supported=model_supported,
+        model_abstained=model_abstained,
+        model_token_coverage=model_token_coverage,
+        model_nearest_similarity=model_nearest_similarity,
+        model_unknown_tokens=model_unknown_tokens,
         verdict=_verdict(risk_score),
         evidence=ranked[: config.max_evidence],
     )
