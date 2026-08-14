@@ -21,6 +21,8 @@ python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 make lint
 make test
+npm ci
+make test-web
 ~~~
 
 The core scanner must remain usable without PyTorch or NumPy. Optional µMal
@@ -44,7 +46,8 @@ false positives.
 ## Pull requests
 
 Keep changes focused. Explain the behavior being modeled, threat assumptions,
-expected false positives, and validation performed. Run make lint and make test.
+expected false positives, and validation performed. Run `make lint` and
+`make test`; web changes also require `npm ci` and `make test-web`.
 For model claims, include the locked split, seed, thresholds, confidence
 intervals, checkpoint size, and target CPU measurements.
 

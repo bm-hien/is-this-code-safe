@@ -5,10 +5,13 @@ import {
   loadFullModel,
   MAX_SOURCE_BYTES,
 } from "./engine.mjs";
+import { createSourceEditor } from "./source-editor.mjs";
 
 const elements = Object.freeze({
   editor: document.querySelector("#editor-panel"),
   source: document.querySelector("#source-code"),
+  sourceMount: document.querySelector("#source-editor"),
+  editorKind: document.querySelector("#editor-kind"),
   fileInput: document.querySelector("#file-input"),
   fileName: document.querySelector("#file-name"),
   fileSize: document.querySelector("#file-size"),
@@ -54,6 +57,13 @@ const assessmentText = Object.freeze({
 let currentFileName = "sample.py";
 let currentReport = null;
 let modelLoading = false;
+let sourceEditor = {
+  focus: () => elements.source.focus(),
+  getValue: () => elements.source.value,
+  setValue: (value) => {
+    elements.source.value = value;
+  },
+};
 function formatBytes(bytes) {
   if (bytes < 1024) return bytes + " B";
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
@@ -61,7 +71,7 @@ function formatBytes(bytes) {
 }
 
 function sourceBytes() {
-  return new TextEncoder().encode(elements.source.value).length;
+  return new TextEncoder().encode(sourceEditor.getValue()).length;
 }
 
 function updateFileMetadata() {
@@ -72,10 +82,10 @@ function updateFileMetadata() {
 function updateAnalyzeState() {
   const ready = getFullModelStatus().loaded;
   elements.analyze.disabled =
-    modelLoading || !ready || !elements.source.value.trim();
+    modelLoading || !ready || !sourceEditor.getValue().trim();
   if (!ready) {
     elements.analyze.title = "Download the full model first";
-  } else if (!elements.source.value.trim()) {
+  } else if (!sourceEditor.getValue().trim()) {
     elements.analyze.title = "Add Python source first";
   } else {
     elements.analyze.removeAttribute("title");
@@ -244,7 +254,7 @@ async function analyze() {
     renderError(new Error("Download the full model before analyzing."));
     return;
   }
-  const source = elements.source.value;
+  const source = sourceEditor.getValue();
   if (!source.trim()) {
     renderError(new Error("Paste Python source or choose a .py file first."));
     return;
@@ -294,7 +304,7 @@ async function downloadModel() {
     elements.modelCopy.textContent =
       status.metadata.parameters.toLocaleString() +
       " parameters · waiting for a test input";
-    elements.assessmentTitle.textContent = elements.source.value.trim()
+    elements.assessmentTitle.textContent = sourceEditor.getValue().trim()
       ? "Ready to analyze"
       : "Waiting for input";
     elements.assessmentCopy.textContent =
@@ -321,7 +331,7 @@ async function loadFile(file) {
     return;
   }
   try {
-    elements.source.value = await file.text();
+    sourceEditor.setValue(await file.text());
     currentFileName = file.name || "sample.py";
     updateFileMetadata();
     updateAnalyzeState();
@@ -333,24 +343,35 @@ async function loadFile(file) {
 function loadSample(name) {
   if (!(name in DEMO_SOURCES)) return;
   currentFileName = name + ".py";
-  elements.source.value = DEMO_SOURCES[name];
+  sourceEditor.setValue(DEMO_SOURCES[name]);
   updateFileMetadata();
   updateAnalyzeState();
-  elements.source.focus();
+  sourceEditor.focus();
 }
 
-elements.loadModel.addEventListener("click", downloadModel);
-elements.analyze.addEventListener("click", analyze);
-elements.source.addEventListener("input", () => {
+void createSourceEditor({
+  mount: elements.sourceMount,
+  textarea: elements.source,
+  onChange() {
+    updateFileMetadata();
+    updateAnalyzeState();
+  },
+}).then((editor) => {
+  sourceEditor = editor;
+  elements.editorKind.textContent =
+    editor.kind === "monaco" ? "PYTHON · MONACO" : "PYTHON · BASIC EDITOR";
   updateFileMetadata();
   updateAnalyzeState();
 });
+
+elements.loadModel.addEventListener("click", downloadModel);
+elements.analyze.addEventListener("click", analyze);
 elements.clear.addEventListener("click", () => {
   currentFileName = "sample.py";
-  elements.source.value = "";
+  sourceEditor.setValue("");
   updateFileMetadata();
   updateAnalyzeState();
-  elements.source.focus();
+  sourceEditor.focus();
 });
 
 elements.fileInput.addEventListener("change", () => {

@@ -36,6 +36,8 @@ _DATAFLOW_EXEC_SINKS = {"DYNAMIC_EXEC", "PROCESS_EXEC"}
 class ExtractorLimits:
     max_file_bytes: int = 1_000_000
     max_events: int = 2_000
+    max_call_depth: int = 3
+    max_call_expansions: int = 64
 
 
 class PythonExtractor:
@@ -92,13 +94,18 @@ class PythonExtractor:
         result.events = visitor.events
         result.event_limit_reached = visitor.event_limit_reached
         dataflow_paths = []
-        if self.enable_dataflow and _has_dataflow_candidate(visitor.events):
+        if self.enable_dataflow and _has_dataflow_candidate(
+            visitor.events,
+            visitor.call_names,
+        ):
             try:
                 dataflow_paths = build_local_dataflow_paths(
                     tree,
                     visitor.events,
                     visitor.node_events,
                     visitor.call_names,
+                    max_call_depth=self.limits.max_call_depth,
+                    max_call_expansions=self.limits.max_call_expansions,
                 )
             except (RecursionError, ValueError) as error:
                 result.parse_error = (
@@ -346,8 +353,11 @@ class _BehaviorVisitor(ast.NodeVisitor):
         return None
 
 
-def _has_dataflow_candidate(events: list[Event]) -> bool:
-    """Cheap gate for the bounded second AST pass, scoped per callable."""
+def _has_dataflow_candidate(
+    events: list[Event],
+    call_names: dict[int, str],
+) -> bool:
+    """Cheap gate for local flows and statically resolved direct calls."""
     operations_by_function: dict[str, set[str]] = {}
     for event in events:
         operations_by_function.setdefault(event.function, set()).add(event.op)
@@ -356,7 +366,16 @@ def _has_dataflow_candidate(events: list[Event]) -> bool:
             return True
         if operations & _DATAFLOW_EXEC_SINKS and operations & _DATAFLOW_EXEC_SOURCES:
             return True
-    return False
+
+    has_local_call = any(name.startswith("<module>.") for name in call_names.values())
+    if not has_local_call:
+        return False
+    operations = set().union(*operations_by_function.values())
+    if "NETWORK_SEND" in operations and operations & _DATAFLOW_SEND_SOURCES:
+        return True
+    return bool(
+        operations & _DATAFLOW_EXEC_SINKS and operations & _DATAFLOW_EXEC_SOURCES
+    )
 
 
 def _format_parse_error(error: Exception) -> str:

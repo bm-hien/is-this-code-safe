@@ -5,6 +5,10 @@ on:
     branches: ["main"]
     paths:
       - "web/**"
+      - "scripts/build_web_editor.mjs"
+      - "scripts/monaco_editor_*.mjs"
+      - "package.json"
+      - "package-lock.json"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -30,9 +34,15 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "24"
-          package-manager-cache: false
+          cache: npm
+      - name: Install web build dependencies
+        run: npm ci
+      - name: Build browser editor
+        run: npm run build:web
+      - name: Verify committed browser assets
+        run: git diff --exit-code -- web/assets
       - name: Test browser analyzer
-        run: node --test web/tests/*.test.mjs
+        run: npm run test:web
       - name: Configure Pages
         uses: actions/configure-pages@v5
       - name: Upload static site

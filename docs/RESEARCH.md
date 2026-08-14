@@ -88,16 +88,36 @@ Three observations motivate the version 0.4 flow design:
    an operation deserves an alert.
 
 ITCS therefore performs a second, bounded AST traversal only when a cheap
-per-callable event gate finds a supported source/sink candidate. It follows
-local names through assignments, expressions, transforms, comprehensions, and
-conservative control-flow joins. It does not build a call graph, compute SHAP,
-or cross function boundaries. Proven local paths receive `dataflow:high`;
-unproven same-function windows remain visible as low-weight `proximity:low`.
-Those labels are qualitative evidence tiers, not calibrated probabilities.
+event gate finds a supported source/sink candidate. It follows local names
+through assignments, expressions, transforms, comprehensions, and conservative
+control-flow joins. It does not build a whole-program call graph or compute
+SHAP. Proven paths inside one callable receive `dataflow:high`; unproven
+same-function windows remain visible as low-weight `proximity:low`. Those
+labels are qualitative evidence tiers, not calibrated probabilities.
+
+The 2026-08-14 follow-up adds summaries for bare calls to unique, unrebound
+top-level definitions. Lexical shadows, duplicate/rebound definitions, callable
+aliases, and star-import ambiguity are rejected rather than guessed. Arguments
+are bound in an isolated callee frame and return provenance is merged under a
+default depth of 3 and 64 expansions per file. Async callees require an
+immediate `await`, while generator creation does not activate a generator body.
+Eligible crossings receive `summary:medium`, preserve their real event indexes,
+and reuse the existing motif token. The design is narrower than a global solver:
+globals, attributes, mutation, dynamic dispatch, nested/imported functions, and
+cross-module behavior remain outside its claim. The design rationale follows
+the local/global distinction and summary-model pattern in
+[CodeQL's data-flow documentation](https://codeql.github.com/docs/writing-codeql-queries/about-data-flow-analysis/)
+and the valid-call/return motivation of
+[IFDS](https://doi.org/10.1145/199448.199462), without claiming to implement
+either complete system.
 
 Counterexample tests cover reassignment, unrelated constant payloads, URL-only
-provenance, branch joins, unknown local transforms, and callable boundaries.
-They validate implementation semantics, not detection accuracy on real malware.
+provenance, branch joins, unknown transforms, constant-return and default-argument
+semantics, lexical shadowing, duplicate/rebound definitions, async and
+generator activation, recursion, and expansion limits. They validate
+implementation semantics, not detection accuracy on real malware. The detailed
+decision record is in
+[BOUNDED_CALL_SUMMARIES.md](BOUNDED_CALL_SUMMARIES.md).
 
 ### 2.3 Evidence update: paired claims, not two independent scorecards
 
@@ -186,11 +206,14 @@ Raw code lets a model learn package names, comments, formatting, and copied
 boilerplate. MalIR retains operations, lifecycle phase, target class, order,
 and evidence location. It deliberately discards most lexical content.
 
-The current extractor first emits events, then uses a cheap per-callable gate
-to decide whether a bounded local provenance pass can produce a supported path.
-That pass is name-independent and flow-sensitive for local values, while the
-12-event window remains only a weak fallback. A later bounded call-summary pass
-may improve recall without recreating a whole-program call graph.
+The current extractor first emits events, then uses a cheap candidate gate to
+decide whether a bounded provenance pass can produce a supported path. That
+pass is name-independent and flow-sensitive for local values. It can expand
+eligible unique, unrebound top-level direct calls under explicit depth and
+count limits; the 12-event window remains only a weak fallback. A synthetic
+summary-path ablation now quantifies common-path cost, but whether summaries
+improve real-world recall without unacceptable false positives is still an
+open, locked-evaluation question.
 
 ### 4.2 Two learned stages
 
@@ -368,13 +391,38 @@ On this synthetic mix, bounded flow adds 3.71% mean, 2.97% median, 4.70% p95,
 and 0.82% peak Python allocation. Before the candidate gate, a seven-repeat
 probe showed roughly 20% median overhead because every ordinary file paid for
 a second AST traversal. That exploratory probe motivated the optimization; the
-21-repeat gated result above is the recorded baseline.
+21-repeat gated result above is the recorded local-only baseline. It predates
+the 2026-08-14 direct-call summary implementation.
 
 tracemalloc excludes native allocations and adds overhead. Sequential benchmark
 modes can still be affected by host noise. A production benchmark must also
 interleave modes, record process RSS, and cover cold filesystem behavior and
 real package-size distributions. These numbers measure cost, not detection
 quality.
+
+### Direct-call summary ablation
+
+On 2026-08-14, a separate 1,000-file corpus kept both modes on candidate-gated
+local flow and changed only direct-call expansion. Ninety-five percent of files
+were ordinary inert templates; 5% contained an inert source and sink split
+across directly resolved top-level functions. Each mode warmed once and then
+ran 21 sequential scans under `tracemalloc`.
+
+| Mode | Mean | Median | p95 | Throughput | Peak Python allocation |
+|---|---:|---:|---:|---:|---:|
+| Local-only flow | 1,298.14 ms | 1,287.35 ms | 1,472.37 ms | 770.33 files/s | 2,838,444 B |
+| Direct-call summaries | 1,331.76 ms | 1,298.90 ms | 1,468.30 ms | 750.89 files/s | 2,988,092 B |
+
+The latest measured delta was +2.59% mean, +0.90% median, -0.28% p95, and
++5.27% peak Python allocation. This isolates the implemented summary path on a
+synthetic stress mix. An immediately preceding 21-repeat run on the same host
+measured +3.33% mean, +3.30% median, +1.13% p95, and +5.28% allocation.
+The spread and negative latest p95 show that sequential mode order is confounded
+by host noise; it is not evidence of a speedup. `tracemalloc` also excludes
+process/native RSS. This is a cost measurement, not evidence that summaries
+improve malware detection. Reproduce it with
+`itcs benchmark PATH --compare-summaries` or
+`scripts/benchmark_corpus.py --compare-summaries`.
 
 ### µMal pipeline
 
@@ -399,13 +447,14 @@ round-trip; it says nothing about generalization.
 
 ### Test state
 
-Ninety-two automated tests currently pass: 86 Python tests and six browser
-engine tests. They cover extraction ordering, alias resolution, non-execution,
+One hundred seventy-nine automated tests currently pass: 165 Python tests and
+14 browser tests. They cover extraction ordering, alias resolution, non-execution,
 syntax errors and warning isolation, deterministic tokens, symlinks and size
-limits, bounded hostile archives, source-set/normalized-AST grouping,
-local-provenance counterexamples and gating, sparse learning/serialization,
-µMal training/loading, manifest leakage, low-FPR power, paired group statistics,
-CLI JSON, browser evidence fidelity, and benchmark output.
+limits, bounded hostile archives, source-set/normalized-AST grouping, local and
+direct-call provenance counterexamples and gating, sparse
+learning/serialization, µMal training/loading, manifest leakage, low-FPR power,
+paired group statistics, CLI JSON, browser evidence fidelity, Monaco wiring and
+fallback, and benchmark output.
 
 ## 10. Claim gates
 
@@ -428,10 +477,14 @@ until all corresponding gates pass.
 
 - Metadata audit, locked evaluation, and paired comparison: implemented.
 - Name-independent bounded local value flow and candidate gate: implemented.
+- Bounded top-level direct-call summaries with medium-confidence evidence and
+  a reproducible synthetic cost ablation: implemented; locked quality and
+  interleaved RSS evaluation remains pending.
 - Bounded non-extracting archive reader and isolated OMCBench runner: implemented.
 - Group-aware 400-package OMCBench pilot: completed; primary claim unsupported.
 - Redesign package aggregation and context using the observed hard negatives.
-- Add bounded function summaries without whole-program graph construction.
+- Evaluate direct-call summaries against local-only flow on the same locked
+  artifacts before changing policy weights.
 - Build a statistically powered, provenance-rich hard-negative corpus.
 - Calibrate only the redesigned score on validation and freeze all decisions.
 - Add repeated process RSS/CPU profiling to the experiment record.

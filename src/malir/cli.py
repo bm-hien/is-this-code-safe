@@ -8,7 +8,11 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .benchmark import benchmark_dataflow_ablation, benchmark_scan
+from .benchmark import (
+    benchmark_call_summary_ablation,
+    benchmark_dataflow_ablation,
+    benchmark_scan,
+)
 from .comparison import paired_comparison_report
 from .data import load_examples
 from .evaluation import evaluation_report, load_predictions
@@ -65,6 +69,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="disable local provenance analysis for cost/quality ablations",
     )
     scan.add_argument(
+        "--no-call-summaries",
+        action="store_true",
+        help="keep local flow but disable bounded direct-call summaries",
+    )
+    scan.add_argument(
         "--fail-on",
         choices=EXIT_THRESHOLDS,
         default="never",
@@ -75,6 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     extract.add_argument("path")
     extract.add_argument("--compact", action="store_true")
     extract.add_argument("--no-dataflow", action="store_true")
+    extract.add_argument("--no-call-summaries", action="store_true")
 
     sparse = commands.add_parser(
         "train-sparse",
@@ -111,9 +121,19 @@ def build_parser() -> argparse.ArgumentParser:
     dataflow_mode = bench.add_mutually_exclusive_group()
     dataflow_mode.add_argument("--no-dataflow", action="store_true")
     dataflow_mode.add_argument(
+        "--no-call-summaries",
+        action="store_true",
+        help="keep local flow but disable bounded direct-call summaries",
+    )
+    dataflow_mode.add_argument(
         "--compare-dataflow",
         action="store_true",
         help="measure provenance overhead against the proximity-only baseline",
+    )
+    dataflow_mode.add_argument(
+        "--compare-summaries",
+        action="store_true",
+        help="measure direct-call summary overhead against local-only flow",
     )
 
     audit = commands.add_parser(
@@ -277,6 +297,7 @@ def _scanner_from_args(args: argparse.Namespace) -> Scanner:
         model=model,
         limits=limits,
         enable_dataflow=not args.no_dataflow,
+        enable_call_summaries=not args.no_call_summaries,
     )
 
 
@@ -291,7 +312,10 @@ def _scan(args: argparse.Namespace) -> int:
 
 
 def _extract(args: argparse.Namespace) -> int:
-    report = Scanner(enable_dataflow=not args.no_dataflow).scan(args.path)
+    report = Scanner(
+        enable_dataflow=not args.no_dataflow,
+        enable_call_summaries=not args.no_call_summaries,
+    ).scan(args.path)
     payload = {
         "schema": "malir.ir.v1",
         "target": report.target,
@@ -364,29 +388,44 @@ def _train_micro(args: argparse.Namespace) -> int:
 def _benchmark(args: argparse.Namespace) -> int:
     if args.compare_dataflow:
         result = benchmark_dataflow_ablation(args.path, repeats=args.repeats)
+    elif args.compare_summaries:
+        result = benchmark_call_summary_ablation(
+            args.path,
+            repeats=args.repeats,
+        )
     else:
         result = benchmark_scan(
             args.path,
             repeats=args.repeats,
-            scanner=Scanner(enable_dataflow=not args.no_dataflow),
+            scanner=Scanner(
+                enable_dataflow=not args.no_dataflow,
+                enable_call_summaries=not args.no_call_summaries,
+            ),
         )
     if args.as_json:
         print(json.dumps(result, indent=2, sort_keys=True))
-    elif args.compare_dataflow:
-        baseline = result["baseline"]
-        dataflow = result["dataflow"]
+    elif args.compare_dataflow or args.compare_summaries:
+        if args.compare_dataflow:
+            baseline = result["baseline"]
+            candidate = result["dataflow"]
+        else:
+            baseline = result["local_only"]
+            candidate = result["summaries"]
         print(
             f"{baseline['files_per_run']} files | "
             f"median {baseline['median_ms']:.2f} → "
-            f"{dataflow['median_ms']:.2f} ms | "
+            f"{candidate['median_ms']:.2f} ms | "
             f"median overhead {result['median_overhead_percent']:.1f}% | "
             f"p95 overhead {result['p95_overhead_percent']:.1f}% | "
             f"peak allocations {result['peak_allocation_overhead_percent']:.1f}%"
         )
     else:
         dataflow = "dataflow on" if result["dataflow_enabled"] else "dataflow off"
+        summaries = (
+            "summaries on" if result["call_summaries_enabled"] else "summaries off"
+        )
         print(
-            f"{result['files_per_run']} files | {dataflow} | "
+            f"{result['files_per_run']} files | {dataflow} | {summaries} | "
             f"median {result['median_ms']:.2f} ms | "
             f"p95 {result['p95_ms']:.2f} ms | "
             f"{result['files_per_second'] or 0:.1f} files/s | "

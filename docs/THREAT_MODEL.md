@@ -23,10 +23,16 @@ must not trust:
 - Source is opened as bytes, bounded, decoded with replacement, and passed to
   ast.parse.
 - No inspected module is imported, compiled to bytecode, installed, or run.
-- Local provenance is a second traversal of the already parsed AST; it performs
-  no evaluation and is bounded by traces per value, trace length, and path count.
-- A per-callable event gate skips provenance traversal when no supported
-  source/sink combination exists.
+- Provenance is a second traversal of the already parsed AST; it performs no
+  evaluation and is bounded by traces per value, trace length, path count,
+  direct-call depth, and direct-call expansion count.
+- Only bare calls to unique, unrebound top-level definitions may expand in
+  isolated local frames. Lexical shadows, aliases, duplicate/module rebinding,
+  and star-import ambiguity are rejected; async callees require immediate
+  `await`, and generator creation does not execute the body.
+- The event gate skips provenance traversal when no supported source/sink
+  combination exists; its broader file-level check requires a resolved local
+  call.
 - A provenance recursion/value error is reported and falls back to weak
   proximity evidence instead of aborting the whole scan.
 - Files over the configured limit are skipped.
@@ -75,7 +81,8 @@ Python's parser and archive decompression still consume CPU and memory on
 attacker-controlled input. Current controls bound bytes per file, archive and
 member bytes, total source/uncompressed bytes, file/member count, path length,
 compression ratio, emitted events, provenance traces per value, trace length,
-and behavior-path count. Nested archives are not followed. The reader itself
+behavior-path count, direct-call depth, and direct-call expansions per file.
+Nested archives are not followed. The reader itself
 does not enforce a wall clock, so the OS worker must impose CPU, memory, PID,
 filesystem, and lifecycle limits.
 
@@ -91,8 +98,9 @@ Static syntax analysis can miss:
 - encrypted or remotely retrieved payloads;
 - native code and unsafe build backends;
 - runtime-generated import names, URLs, and paths;
-- semantic flows split across functions, globals, object attributes, mutation,
-  dynamic dispatch, or packages;
+- semantic flows through callable aliases, generators, async scheduling,
+  imported/nested functions, methods, globals, closures, object attributes,
+  mutation, dynamic dispatch, or packages;
 - environment-triggered branches and logic bombs;
 - adversarial dead code designed to create false positives;
 - equivalent APIs absent from the policy vocabulary.

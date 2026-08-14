@@ -1,8 +1,9 @@
-"""Bounded, name-independent local value provenance for MalIR.
+"""Bounded, name-independent value provenance for MalIR.
 
 This module performs a second AST pass after event extraction. It never imports
-or executes inspected code. The analysis is deliberately intraprocedural and
-flow-sensitive for straight-line assignments, with conservative branch joins.
+or executes inspected code. The analysis is flow-sensitive within callables and
+can cross statically resolved top-level function calls under strict depth and
+expansion limits. Globals, attributes, and dynamic dispatch remain isolated.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ VALUE_TRANSFORMS = {
 }
 EXECUTION_SINKS = {"DYNAMIC_EXEC", "PROCESS_EXEC"}
 _FILE_STAGE_PREFIX = "\0malir-file-stage:"
+_SUMMARY_BOUNDARY = -1
 _PROCESS_LAUNCHERS = {
     "bash",
     "cmd",
@@ -53,6 +55,94 @@ _PROCESS_LAUNCHERS = {
 }
 
 
+class _FunctionBindingCollector(ast.NodeVisitor):
+    """Collect lexical bindings without descending into nested scopes."""
+
+    def __init__(self) -> None:
+        self.names: set[str] = set()
+        self.has_star_import = False
+        self.has_yield = False
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, (ast.Store, ast.Del)):
+            self.names.add(node.id)
+
+    def visit_Import(self, node: ast.Import) -> None:
+        self.names.update(item.asname or item.name.split(".")[0] for item in node.names)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        for item in node.names:
+            if item.name == "*":
+                self.has_star_import = True
+            else:
+                self.names.add(item.asname or item.name)
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.name:
+            self.names.add(node.name)
+        self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.names.add(node.name)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self.names.add(node.name)
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.names.add(node.name)
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return None
+
+    def visit_ListComp(self, node: ast.ListComp) -> None:
+        self.visit(node.elt)
+        self._visit_comprehensions(node.generators)
+
+    def visit_SetComp(self, node: ast.SetComp) -> None:
+        self.visit(node.elt)
+        self._visit_comprehensions(node.generators)
+
+    def visit_DictComp(self, node: ast.DictComp) -> None:
+        self.visit(node.key)
+        self.visit(node.value)
+        self._visit_comprehensions(node.generators)
+
+    def visit_GeneratorExp(self, node: ast.GeneratorExp) -> None:
+        self.visit(node.elt)
+        self._visit_comprehensions(node.generators)
+
+    def _visit_comprehensions(
+        self,
+        generators: list[ast.comprehension],
+    ) -> None:
+        for generator in generators:
+            self.visit(generator.iter)
+            for condition in generator.ifs:
+                self.visit(condition)
+
+    def visit_Yield(self, node: ast.Yield) -> None:
+        self.has_yield = True
+
+    def visit_YieldFrom(self, node: ast.YieldFrom) -> None:
+        self.has_yield = True
+
+    def visit_MatchAs(self, node: ast.MatchAs) -> None:
+        if node.name:
+            self.names.add(node.name)
+        if node.pattern is not None:
+            self.visit(node.pattern)
+
+    def visit_MatchStar(self, node: ast.MatchStar) -> None:
+        if node.name:
+            self.names.add(node.name)
+
+    def visit_MatchMapping(self, node: ast.MatchMapping) -> None:
+        if node.rest:
+            self.names.add(node.rest)
+        for pattern in node.patterns:
+            self.visit(pattern)
+
+
 def build_local_dataflow_paths(
     tree: ast.AST,
     events: list[Event],
@@ -62,8 +152,10 @@ def build_local_dataflow_paths(
     max_traces_per_value: int = 16,
     max_trace_length: int = 16,
     max_paths: int = 256,
+    max_call_depth: int = 3,
+    max_call_expansions: int = 64,
 ) -> list[BehaviorPath]:
-    """Return bounded source-to-sink paths within individual callables."""
+    """Return bounded local and direct-call source-to-sink paths."""
     analyzer = _LocalFlowAnalyzer(
         events,
         node_events,
@@ -71,6 +163,8 @@ def build_local_dataflow_paths(
         max_traces_per_value=max_traces_per_value,
         max_trace_length=max_trace_length,
         max_paths=max_paths,
+        max_call_depth=max_call_depth,
+        max_call_expansions=max_call_expansions,
     )
     return analyzer.analyze(tree)
 
@@ -85,6 +179,8 @@ class _LocalFlowAnalyzer:
         max_traces_per_value: int,
         max_trace_length: int,
         max_paths: int,
+        max_call_depth: int,
+        max_call_expansions: int,
     ) -> None:
         self.events = events
         self.node_events = node_events
@@ -92,13 +188,45 @@ class _LocalFlowAnalyzer:
         self.max_traces_per_value = max_traces_per_value
         self.max_trace_length = max_trace_length
         self.max_paths = max_paths
+        self.max_call_depth = max_call_depth
+        self.max_call_expansions = max_call_expansions
         self.env: dict[str, Traces] = {}
         self.paths: list[BehaviorPath] = []
         self.path_keys: set[tuple[str, tuple[int, ...]]] = set()
         self.file_handles: dict[str, str] = {}
+        self.local_functions: dict[str, ast.FunctionDef | ast.AsyncFunctionDef] = {}
+        self.function_local_names: dict[int, set[str]] = {}
+        self.generator_function_ids: set[int] = set()
+        self.active_calls: set[str] = set()
+        self.call_depth = 0
+        self.call_expansions = 0
+        self.return_frames: list[list[Traces]] = []
+        self.local_name_frames: list[set[str]] = []
 
     def analyze(self, tree: ast.AST) -> list[BehaviorPath]:
         if isinstance(tree, ast.Module):
+            definitions: dict[
+                str,
+                list[ast.FunctionDef | ast.AsyncFunctionDef],
+            ] = {}
+            rebound_names: set[str] = set()
+            has_star_import = False
+            for statement in tree.body:
+                if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    definitions.setdefault(statement.name, []).append(statement)
+                    continue
+                collector = _FunctionBindingCollector()
+                collector.visit(statement)
+                rebound_names.update(collector.names)
+                has_star_import = has_star_import or collector.has_star_import
+            if not has_star_import:
+                self.local_functions = {
+                    f"<module>.{name}": nodes[0]
+                    for name, nodes in definitions.items()
+                    if len(nodes) == 1 and name not in rebound_names
+                }
+            for function in self.local_functions.values():
+                self._local_bound_names(function)
             self._block(tree.body)
         return sorted(
             self.paths,
@@ -126,13 +254,16 @@ class _LocalFlowAnalyzer:
         if isinstance(node, ast.Expr):
             self._expr(node.value)
             return
-        if isinstance(node, (ast.Return, ast.Raise)):
-            value = getattr(node, "value", None) or getattr(node, "exc", None)
-            if value is not None:
-                self._expr(value)
-            cause = getattr(node, "cause", None)
-            if cause is not None:
-                self._expr(cause)
+        if isinstance(node, ast.Return):
+            traces = self._expr(node.value)
+            if self.return_frames:
+                self.return_frames[-1].append(traces)
+            return
+        if isinstance(node, ast.Raise):
+            if node.exc is not None:
+                self._expr(node.exc)
+            if node.cause is not None:
+                self._expr(node.cause)
             return
         if isinstance(node, ast.Assert):
             self._expr(node.test)
@@ -234,9 +365,15 @@ class _LocalFlowAnalyzer:
             self.env[node.args.vararg.arg] = ()
         if node.args.kwarg is not None:
             self.env[node.args.kwarg.arg] = ()
-        self._block(node.body)
-        self.env = outer
-        self.file_handles = outer_handles
+        self.return_frames.append([])
+        self.local_name_frames.append(self._local_bound_names(node))
+        try:
+            self._block(node.body)
+        finally:
+            self.local_name_frames.pop()
+            self.return_frames.pop()
+            self.env = outer
+            self.file_handles = outer_handles
 
     def _class(self, node: ast.ClassDef) -> None:
         for decorator in node.decorator_list:
@@ -303,7 +440,11 @@ class _LocalFlowAnalyzer:
             return traces
         if isinstance(node, ast.Lambda):
             return ()
-        if isinstance(node, (ast.Await, ast.Yield, ast.YieldFrom, ast.Starred)):
+        if isinstance(node, ast.Await):
+            if isinstance(node.value, ast.Call):
+                return self._call(node.value, awaited=True)
+            return self._expr(node.value)
+        if isinstance(node, (ast.Yield, ast.YieldFrom, ast.Starred)):
             return self._expr(node.value)
         if isinstance(node, ast.IfExp):
             return self._merge(
@@ -346,7 +487,7 @@ class _LocalFlowAnalyzer:
             )
         )
 
-    def _call(self, node: ast.Call) -> Traces:
+    def _call(self, node: ast.Call, *, awaited: bool = False) -> Traces:
         function_traces = self._expr(node.func)
         arguments = [self._expr(argument) for argument in node.args]
         keywords = [
@@ -359,7 +500,36 @@ class _LocalFlowAnalyzer:
             *(traces for _, traces in keywords),
         )
         if event_index is None:
-            return all_inputs
+            name = self.call_names.get(id(node), "")
+            direct_name = (
+                isinstance(node.func, ast.Name) and name == f"<module>.{node.func.id}"
+            )
+            shadowed = not direct_name or (
+                node.func.id in self.env
+                or (
+                    bool(self.local_name_frames)
+                    and (
+                        "*" in self.local_name_frames[-1]
+                        or node.func.id in self.local_name_frames[-1]
+                    )
+                )
+            )
+            function = None if shadowed else self.local_functions.get(name)
+            if function is None:
+                return all_inputs
+            if (
+                isinstance(function, ast.AsyncFunctionDef)
+                and not awaited
+                or self._is_generator(function)
+            ):
+                return ()
+            return self._invoke_local(
+                name,
+                function,
+                arguments,
+                keywords,
+                all_inputs,
+            )
 
         operation = self.events[event_index].op
         if operation in VALUE_SOURCES:
@@ -385,6 +555,152 @@ class _LocalFlowAnalyzer:
             self._record_sink(event_index, payload)
             return ()
         return all_inputs
+
+    def _invoke_local(
+        self,
+        name: str,
+        function: ast.FunctionDef | ast.AsyncFunctionDef,
+        arguments: list[Traces],
+        keywords: list[tuple[str | None, Traces]],
+        all_inputs: Traces,
+    ) -> Traces:
+        if self.max_call_depth <= 0 or self.max_call_expansions <= 0:
+            return all_inputs
+        if (
+            self.call_depth >= self.max_call_depth
+            or self.call_expansions >= self.max_call_expansions
+            or name in self.active_calls
+        ):
+            return self._mark_summary(all_inputs)
+
+        outer_env = self.env
+        outer_handles = self.file_handles
+        frame: list[Traces] = []
+        self.env = self._bind_arguments(function, arguments, keywords)
+        self.file_handles = {}
+        self.return_frames.append(frame)
+        self.local_name_frames.append(self._local_bound_names(function))
+        self.active_calls.add(name)
+        self.call_depth += 1
+        self.call_expansions += 1
+        try:
+            self._block(function.body)
+            returned = self._merge(*frame)
+        finally:
+            self.call_depth -= 1
+            self.active_calls.remove(name)
+            self.local_name_frames.pop()
+            self.return_frames.pop()
+            self.env = outer_env
+            self.file_handles = outer_handles
+        return self._mark_summary(returned)
+
+    def _bind_arguments(
+        self,
+        function: ast.FunctionDef | ast.AsyncFunctionDef,
+        arguments: list[Traces],
+        keywords: list[tuple[str | None, Traces]],
+    ) -> dict[str, Traces]:
+        parameters = (*function.args.posonlyargs, *function.args.args)
+        positional_only_count = len(function.args.posonlyargs)
+        named = {name: traces for name, traces in keywords if name is not None}
+        default_parameters = (
+            parameters[-len(function.args.defaults) :] if function.args.defaults else ()
+        )
+        defaults = {
+            parameter.arg: default
+            for parameter, default in zip(
+                default_parameters,
+                function.args.defaults,
+                strict=True,
+            )
+        }
+        bound: dict[str, Traces] = {}
+        for index, parameter in enumerate(parameters):
+            supplied: list[Traces] = []
+            if index < len(arguments):
+                supplied.append(arguments[index])
+            if index >= positional_only_count and parameter.arg in named:
+                supplied.append(named[parameter.arg])
+            if not supplied and parameter.arg in defaults:
+                supplied.append(self._expr(defaults[parameter.arg]))
+            bound[parameter.arg] = self._mark_summary(self._merge(*supplied))
+
+        if function.args.vararg is not None:
+            bound[function.args.vararg.arg] = self._mark_summary(
+                self._merge(*arguments[len(parameters) :])
+            )
+        for parameter, default in zip(
+            function.args.kwonlyargs,
+            function.args.kw_defaults,
+            strict=True,
+        ):
+            value = (
+                named[parameter.arg] if parameter.arg in named else self._expr(default)
+            )
+            bound[parameter.arg] = self._mark_summary(value)
+        if function.args.kwarg is not None:
+            keyword_parameter_names = {
+                parameter.arg
+                for parameter in (*function.args.args, *function.args.kwonlyargs)
+            }
+            extras = [
+                traces
+                for name, traces in keywords
+                if name is None or name not in keyword_parameter_names
+            ]
+            bound[function.args.kwarg.arg] = self._mark_summary(self._merge(*extras))
+        return bound
+
+    def _local_bound_names(
+        self,
+        function: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> set[str]:
+        function_id = id(function)
+        cached = self.function_local_names.get(function_id)
+        if cached is not None:
+            return cached
+        collector = _FunctionBindingCollector()
+        for statement in function.body:
+            collector.visit(statement)
+        names = self._parameter_names(function) | collector.names
+        if collector.has_star_import:
+            names.add("*")
+        if collector.has_yield:
+            self.generator_function_ids.add(function_id)
+        self.function_local_names[function_id] = names
+        return names
+
+    def _is_generator(
+        self,
+        function: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> bool:
+        self._local_bound_names(function)
+        return id(function) in self.generator_function_ids
+
+    @staticmethod
+    def _parameter_names(
+        function: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> set[str]:
+        names = {
+            argument.arg
+            for argument in (
+                *function.args.posonlyargs,
+                *function.args.args,
+                *function.args.kwonlyargs,
+            )
+        }
+        if function.args.vararg is not None:
+            names.add(function.args.vararg.arg)
+        if function.args.kwarg is not None:
+            names.add(function.args.kwarg.arg)
+        return names
+
+    def _mark_summary(self, traces: Traces) -> Traces:
+        return tuple(
+            trace if _SUMMARY_BOUNDARY in trace else (*trace, _SUMMARY_BOUNDARY)
+            for trace in traces
+        )
 
     def _sink_payload(
         self,
@@ -451,7 +767,10 @@ class _LocalFlowAnalyzer:
         remote = tuple(
             trace
             for trace in staged
-            if any(self.events[index].op == "NETWORK_RECEIVE" for index in trace)
+            if any(
+                index >= 0 and self.events[index].op == "NETWORK_RECEIVE"
+                for index in trace
+            )
         )
         if not remote:
             return
@@ -579,7 +898,9 @@ class _LocalFlowAnalyzer:
     def _record_sink(self, sink_index: int, traces: Traces) -> None:
         sink = self.events[sink_index]
         for trace in traces:
-            chain = self._append_trace(trace, sink_index)
+            expanded = self._append_trace(trace, sink_index)
+            through_summary = _SUMMARY_BOUNDARY in expanded
+            chain = tuple(index for index in expanded if index >= 0)
             operations = [self.events[index].op for index in chain]
             if sink.op == "NETWORK_SEND":
                 if any(
@@ -590,18 +911,21 @@ class _LocalFlowAnalyzer:
                         "credential_or_file_exfil",
                         chain,
                         {"ENV_READ", "SENSITIVE_FILE_READ"},
+                        through_summary,
                     )
                 if "SYSTEM_DISCOVERY" in operations:
                     self._record_from_operation(
                         "fingerprinting_transfer",
                         chain,
                         {"SYSTEM_DISCOVERY"},
+                        through_summary,
                     )
                 if "FILE_READ" in operations:
                     self._record_from_operation(
                         "file_to_network",
                         chain,
                         {"FILE_READ"},
+                        through_summary,
                     )
             if sink.op in EXECUTION_SINKS:
                 if "NETWORK_RECEIVE" in operations:
@@ -609,6 +933,7 @@ class _LocalFlowAnalyzer:
                         "download_execute",
                         chain,
                         {"NETWORK_RECEIVE"},
+                        through_summary,
                     )
                 if any(
                     operation in {"DECODE", "UNSAFE_DESERIALIZE"}
@@ -618,6 +943,7 @@ class _LocalFlowAnalyzer:
                         "encoded_execution",
                         chain,
                         {"DECODE", "UNSAFE_DESERIALIZE"},
+                        through_summary,
                     )
 
     def _record_from_operation(
@@ -625,6 +951,7 @@ class _LocalFlowAnalyzer:
         motif: str,
         chain: Trace,
         operations: set[str],
+        through_summary: bool,
     ) -> None:
         start = next(
             index
@@ -636,7 +963,13 @@ class _LocalFlowAnalyzer:
         if key in self.path_keys or len(self.paths) >= self.max_paths:
             return
         self.path_keys.add(key)
-        self.paths.append(make_dataflow_path(motif, indexes))
+        self.paths.append(
+            make_dataflow_path(
+                motif,
+                indexes,
+                through_summary=through_summary,
+            )
+        )
 
     def _comprehension(
         self,
@@ -722,13 +1055,17 @@ class _LocalFlowAnalyzer:
         )
 
     def _append_trace(self, trace: Trace, event_index: int) -> Trace:
-        if trace and trace[-1] == event_index:
+        through_summary = _SUMMARY_BOUNDARY in trace
+        events = tuple(index for index in trace if index >= 0)
+        if events and events[-1] == event_index:
             return trace
-        result = (*trace, event_index)
-        if len(result) <= self.max_trace_length:
-            return result
-        keep = self.max_trace_length - 1
-        return (result[0], *result[-keep:])
+        result = (*events, event_index)
+        if len(result) > self.max_trace_length:
+            keep = self.max_trace_length - 1
+            result = (result[0], *result[-keep:])
+        if through_summary:
+            return (*result, _SUMMARY_BOUNDARY)
+        return result
 
     def _merge(self, *groups: Traces | Trace) -> Traces:
         output: list[Trace] = []

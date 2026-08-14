@@ -17,7 +17,7 @@ Each analyzed file emits:
 | event_limit_reached | Whether additional behavior events were suppressed |
 | parse_error | Sanitized syntax/recursion error or null |
 | events | Ordered evidence-bearing behavior events |
-| behavior_paths | Bounded data-flow, proximity, and structural motifs |
+| behavior_paths | Bounded data-flow, direct-call summary, proximity, and structural motifs |
 | tokens | Deterministic model sequence |
 
 Oversized files are skipped by the scanner rather than partially parsed under
@@ -88,7 +88,8 @@ and `confidence`. Event indexes refer to the ordered file event list.
 
 | Evidence kind | Meaning | Default tier |
 |---|---|---|
-| dataflow | Bounded local value provenance reaches a supported sink | high |
+| dataflow | Bounded value provenance reaches a supported sink inside one callable | high |
+| summary | Bounded provenance reaches a supported sink across a statically resolved direct call | medium |
 | proximity | Source/transform and sink occur in a 12-event same-function window, but value flow is unproven | low |
 | structural | The event itself establishes the motif; no value flow is required | high |
 
@@ -99,9 +100,20 @@ policy scores than data-flow paths.
 The data-flow pass is flow-sensitive for local names and handles assignments,
 container expressions, common transforms, comprehensions, loops, and
 conservative branch joins. Unknown local calls conservatively propagate their
-input provenance. It is bounded to 16 traces per value, 16 events per trace,
-and 256 emitted paths. A cheap per-callable event gate skips this second AST
-pass unless a supported source/sink pair can exist.
+input provenance. A summary requires a bare call to one unique, unrebound
+top-level definition in the same module with no lexical shadow in the caller.
+It binds explicit or default arguments to a fresh local frame and merges return
+provenance. Async callees require an immediate `await`; generator creation is
+not treated as executing the generator body. Eligible crossings are reported
+as `summary:medium`, while paths that remain inside one callable stay
+`dataflow:high`.
+
+The pass is bounded to 16 traces per value, 16 real events per trace, 256
+emitted paths, a direct-call depth of 3, and 64 direct-call expansions per file.
+Recursion and exhausted limits conservatively preserve input provenance. A
+cheap event gate skips this second AST pass unless a supported source/sink pair
+can exist; the broader file-level gate is considered only when a statically
+resolved local call is present.
 
 Supported motifs include:
 
@@ -116,17 +128,29 @@ Supported motifs include:
 | persistence_write | Write targets a common autostart location |
 | destructive_file_action | File or directory deletion |
 
-The analysis is intraprocedural: it does not prove flows through function
-returns, globals, object attributes, mutation, dynamic dispatch, or other
-modules. Every path keeps its supporting event indexes for review. Model tokens
-remain `MOTIF:<name>` regardless of evidence kind, so this additive metadata
-does not invalidate existing v1 sparse or µMal checkpoints.
+The analysis is not whole-program flow. Direct-call summaries cover only
+unique, unrebound top-level functions reached through an unshadowed bare name in
+the same module. Callable aliases, duplicate definitions, star imports, and
+module rebinding are rejected rather than guessed. The pass does not model
+imported or nested functions, methods, globals, closures, object attributes,
+mutation, generator iteration, async scheduling beyond immediate `await`,
+dynamic dispatch, decorators, exceptions, or other modules. Every path keeps
+its supporting real event indexes for review; the internal call-boundary marker
+is never serialized. Model tokens remain
+`MOTIF:<name>` regardless of evidence kind, so this additive metadata does not
+invalidate existing v1 sparse or µMal checkpoints.
+
+See [the bounded-summary design note](BOUNDED_CALL_SUMMARIES.md) for its
+research basis, conservative cases, and regression matrix.
 
 ## Risk and model separation
 
 MalIR contains observations; detector weights and verdict thresholds are policy.
 This separation allows the same IR to feed rules, sparse models, µMal, graph
-models, or external review without changing extraction.
+models, or external review without changing extraction. Summary paths retain
+the existing numeric motif policy, but the default legacy aggregator removes
+their covered source/sink event contributions so a new summary does not stack
+with itself. Older evidence aggregation remains unchanged.
 
 The default cascade calls a supplied model only when the rule score is from 20
 through 80. Model probability is combined with the rule score at 35%/65%.

@@ -6,13 +6,14 @@
     <meta name="color-scheme" content="dark" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <meta
       name="description"
       content="Local browser interface for testing Python source with ITCS."
     />
     <title>ITCS Browser Analyzer</title>
+    <link rel="stylesheet" href="./assets/monaco-editor.css" />
     <link rel="stylesheet" href="./styles.css" />
     <script type="module" src="./app.mjs"></script>
   </head>
@@ -79,9 +80,11 @@
           </div>
 
           <div class="code-wrap">
-            <span class="language-label">PYTHON</span>
+            <span id="editor-kind" class="language-label">PYTHON · EDITOR</span>
+            <div id="source-editor" class="monaco-editor-host"></div>
             <textarea
               id="source-code"
+              class="source-fallback"
               aria-label="Python source code"
               autocomplete="off"
               autocapitalize="off"

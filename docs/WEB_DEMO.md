@@ -1,9 +1,9 @@
 # Browser analyzer architecture
 
 The GitHub Pages analyzer is deliberately static. It has no API, server-side
-runtime, telemetry, or package installation step. Opening the page loads only
-the interface, lexical analyzer, and empty model runtime. It does not load a
-model checkpoint automatically.
+runtime, telemetry, or package installation step. Opening the page loads the
+interface, the locally bundled Monaco editor, the lexical analyzer, and an empty
+model runtime. It does not load a model checkpoint automatically.
 
 The user must select **Download full model** before analysis is enabled. That
 action dynamically imports the small model manifest, downloads `model.bin`
@@ -13,18 +13,47 @@ and installs float32 tensor views in memory.
 ## Security boundary
 
 - User source is handled as text and is never passed to `eval`, `Function`,
-  an import mechanism, a worker, or a subprocess.
+  an import mechanism, a subprocess, or a remote service. Monaco may mirror the
+  editor model into its same-origin worker for editor services only.
 - A 1 MB input bound limits browser memory and CPU use.
 - Dynamic result elements are created with DOM APIs and `textContent`; source
   text is never inserted as HTML.
-- Content Security Policy uses `connect-src 'self'` only so the model binary can
-  be fetched from the page's own origin. There is no upload or outbound API.
+- Content Security Policy limits scripts, connections, and workers to the same
+  origin. Monaco requires inline theme styles, so `style-src` allows inline CSS;
+  inline and remote scripts remain blocked.
 - The model manifest contains a SHA-256 digest checked before weights install.
-- The repository has no third-party JavaScript runtime dependency.
+- Monaco is a pinned build dependency and is committed as static ESM, CSS, and
+  worker assets. There is no CDN or runtime package fetch.
 
 This boundary does not control browser extensions, a modified browser, copied
 results, or a compromised GitHub account. Review the deployed commit before
 using the analyzer for sensitive proprietary source.
+
+## Source editor
+
+Desktop browsers use Monaco 0.56.0 with Python tokenization, line numbers,
+folding, find, bracket matching, indentation guides, multi-cursor editing, and
+common code-editing commands. The build imports only the selected feature
+registrations and runs the generic editor worker from the same origin. A plain
+textarea stays available when Monaco or workers cannot initialize; coarse
+pointer screens below 700 px use that fallback because Monaco does not support
+mobile browsers.
+
+The editor is independent from model loading. Controls become interactive
+against the textarea fallback immediately; Monaco upgrades that editor
+asynchronously instead of blocking the model button. `model.bin` is fetched
+only after the user selects **Download full model**. The build replaces
+Monaco's vendored sanitizer with the explicitly pinned DOMPurify 3.4.13
+dependency; both the build and UI test reject a regression to the vendored
+3.4.8 marker.
+
+Rebuild and test the pinned browser assets with:
+
+```bash
+npm ci
+npm run check:web
+```
+
 ## MalIR-Lite frontend
 
 GitHub Pages cannot execute the Python AST extractor. The browser therefore
@@ -81,6 +110,7 @@ disjoint, time-aware evaluation under `docs/EVALUATION_PROTOCOL.md`.
 Export the existing full checkpoint for the browser:
 
 ```bash
+npm ci
 make web-model
 make test-web
 ```
@@ -94,6 +124,8 @@ make test-web
 
 ## Deployment
 
-`.github/workflows/pages.yml` tests the JavaScript engine, uploads only
-`web/`, and deploys it through the protected `github-pages` environment.
-Every push to `main` that changes the analyzer triggers a new deployment.
+`.github/workflows/pages.yml` installs the locked build dependencies,
+rebuilds Monaco, rejects stale committed assets, runs the JavaScript tests,
+uploads only `web/`, and deploys it through the protected `github-pages`
+environment. Every push to `main` that changes the analyzer or its editor
+build inputs triggers a new deployment.

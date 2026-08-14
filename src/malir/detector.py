@@ -171,7 +171,6 @@ def decide(
     )
     rule_score = _aggregate_rule_score(
         contextual,
-        ranked,
         config.rule_aggregation,
     )
     tokens: list[str] = []
@@ -202,11 +201,10 @@ def decide(
 
 def _aggregate_rule_score(
     contextual: list[_ContextEvidence],
-    ranked: list[Evidence],
     strategy: RuleAggregation,
 ) -> float:
     if strategy == "legacy-top8":
-        return min(100.0, sum(item.score for item in ranked[:8]))
+        return _aggregate_legacy_with_summary_cover(contextual)
     if strategy == "context-max-v1":
         contexts: dict[tuple[str, str], dict[tuple[str, ...], float]] = {}
         for item in contextual:
@@ -227,6 +225,24 @@ def _aggregate_rule_score(
     if strategy == "context-causal-v6":
         return _aggregate_context_causal_v6(contextual)
     raise ValueError(f"unsupported rule aggregation: {strategy}")
+
+
+def _aggregate_legacy_with_summary_cover(
+    contextual: list[_ContextEvidence],
+) -> float:
+    """Preserve legacy ranking while preventing new summary self-stacking."""
+    covered = {
+        event_key
+        for item in contextual
+        if item.evidence.evidence_kind == "summary"
+        for event_key in item.covered_event_keys
+    }
+    scores = [
+        item.evidence.score
+        for item in contextual
+        if item.event_key is None or item.event_key not in covered
+    ]
+    return min(100.0, sum(nlargest(8, scores)))
 
 
 def _aggregate_context_cover(contextual: list[_ContextEvidence]) -> float:
@@ -252,7 +268,7 @@ def _aggregate_context_cover(contextual: list[_ContextEvidence]) -> float:
                 continue
             group = path_groups.setdefault(item.dedup_key, _PathGroup())
             group.score = max(group.score, item.evidence.score)
-            if item.evidence.evidence_kind in {"dataflow", "structural"}:
+            if item.evidence.evidence_kind in {"dataflow", "summary", "structural"}:
                 group.high_confidence = True
                 group.covered.update(item.covered_event_keys)
 
@@ -294,7 +310,7 @@ def _aggregate_context_causal_v6(contextual: list[_ContextEvidence]) -> float:
             causal = [
                 score
                 for score, kind, name in contributions
-                if kind == "dataflow"
+                if kind in {"dataflow", "summary"}
                 or (
                     kind == "structural"
                     and name
@@ -304,7 +320,9 @@ def _aggregate_context_causal_v6(contextual: list[_ContextEvidence]) -> float:
                     }
                 )
             ]
-            has_dataflow = any(kind == "dataflow" for _, kind, _ in contributions)
+            has_dataflow = any(
+                kind in {"dataflow", "summary"} for _, kind, _ in contributions
+            )
             if has_dataflow:
                 context_score = sum(nlargest(2, causal))
             else:
@@ -350,11 +368,13 @@ def _causal_contributions(
         group = path_groups.setdefault(item.dedup_key, _PathGroup())
         group.score = max(group.score, item.evidence.score)
         group.covered.update(item.covered_event_keys)
-        if item.evidence.evidence_kind in {"dataflow", "structural"}:
+        if item.evidence.evidence_kind in {"dataflow", "summary", "structural"}:
             group.high_confidence = True
 
     exact_motifs = {
-        key[1] for key in path_groups if len(key) > 2 and key[2] == "dataflow"
+        key[1]
+        for key in path_groups
+        if len(key) > 2 and key[2] in {"dataflow", "summary"}
     }
     covered: set[tuple[str, int]] = set()
     output: list[tuple[float, str, str]] = []

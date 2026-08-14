@@ -51,6 +51,55 @@ def benchmark_dataflow_ablation(
     }
 
 
+def benchmark_call_summary_ablation(
+    target: str | Path,
+    repeats: int = 20,
+) -> dict:
+    """Compare local-only flow with bounded direct-call summaries."""
+    local_only = benchmark_scan(
+        target,
+        repeats=repeats,
+        scanner=Scanner(
+            enable_dataflow=True,
+            enable_call_summaries=False,
+        ),
+    )
+    summaries = benchmark_scan(
+        target,
+        repeats=repeats,
+        scanner=Scanner(
+            enable_dataflow=True,
+            enable_call_summaries=True,
+        ),
+    )
+    return {
+        "schema": "malir.call-summary-ablation.v1",
+        "local_only": local_only,
+        "summaries": summaries,
+        "mean_overhead_percent": round(
+            100.0 * (summaries["mean_ms"] / local_only["mean_ms"] - 1.0),
+            3,
+        ),
+        "median_overhead_percent": round(
+            100.0 * (summaries["median_ms"] / local_only["median_ms"] - 1.0),
+            3,
+        ),
+        "p95_overhead_percent": round(
+            100.0 * (summaries["p95_ms"] / local_only["p95_ms"] - 1.0),
+            3,
+        ),
+        "peak_allocation_overhead_percent": round(
+            100.0
+            * (
+                summaries["tracemalloc_peak_bytes"]
+                / local_only["tracemalloc_peak_bytes"]
+                - 1.0
+            ),
+            3,
+        ),
+    }
+
+
 def benchmark_scan(
     target: str | Path,
     repeats: int = 20,
@@ -80,6 +129,7 @@ def benchmark_scan(
         "platform": platform.platform(),
         "repeats": repeats,
         "dataflow_enabled": scanner.enable_dataflow,
+        "call_summaries_enabled": scanner.enable_call_summaries,
         "files_per_run": files,
         "mean_ms": round(mean_ms, 4),
         "median_ms": round(statistics.median(timings), 4),

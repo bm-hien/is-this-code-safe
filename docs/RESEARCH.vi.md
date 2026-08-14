@@ -74,8 +74,14 @@ Một kết luận kỹ thuật khác đến từ đối chiếu CodeQL, MOLOT v
 value flow đủ rẻ và chính xác hơn proximity/global flow cho nhiều bài toán,
 trong khi full call graph, data flow toàn cục và SHAP không hợp common path 2
 CPU. Vì vậy từ bản 0.4, pass provenance thứ hai chỉ chạy khi event gate tìm thấy
-cặp source/sink có thể tạo path. Thiết kế này không dựng call graph và không
-đi qua ranh giới function.
+cặp source/sink có thể tạo path. Thiết kế không dựng call graph toàn chương
+trình. Bản cập nhật 2026-08-14 chỉ đi qua bare call tới một định nghĩa
+top-level duy nhất, không bị rebind và không bị lexical binding che khuất, với
+depth mặc định 3 và tối đa 64 lần mở rộng mỗi file. Alias callable, định nghĩa
+trùng, module rebind và star import mơ hồ đều bị từ chối thay vì đoán. Async
+callee chỉ mở rộng dưới `await` trực tiếp; lúc tạo generator không bị coi là đã
+chạy thân generator. Cách này dựa trên ý tưởng function summary và call/return
+hợp lệ, nhưng không phải global data flow hay IFDS đầy đủ.
 
 ## Những gì đã triển khai
 
@@ -97,27 +103,38 @@ Operation độc lập ngôn ngữ gồm ENV_READ, SENSITIVE_FILE_READ, NETWORK_
 NETWORK_RECEIVE, ENCODE, DECODE, PROCESS_EXEC, DYNAMIC_EXEC,
 UNSAFE_DESERIALIZE, PERSISTENCE_WRITE và các context khác.
 
-Behavior path có ba loại bằng chứng:
+Behavior path có bốn loại bằng chứng:
 
 - `dataflow:high`: pass nội hàm đã mang provenance của value từ source được
   hỗ trợ tới payload/command của sink;
+- `summary:medium`: provenance đi qua bare call đủ điều kiện tới một định
+  nghĩa top-level duy nhất, không rebind/lexical-shadow; argument được bind vào
+  frame callee riêng và return được hợp nhất;
 - `proximity:low`: source/transform chỉ xuất hiện gần sink trong cùng function,
   chưa chứng minh value flow và chỉ nhận trọng số nhỏ;
 - `structural:high`: chính event đã đủ tạo motif, không cần value flow.
 
-`high/low` là mức bằng chứng định tính, không phải xác suất hay malware
+`high/medium/low` là mức bằng chứng định tính, không phải xác suất hay malware
 likelihood. Pass local flow theo assignment, biểu thức/container, transform,
 comprehension, loop và branch join bảo thủ. Nó bị chặn ở 16 trace mỗi value,
-16 event mỗi trace và 256 path; event gate bỏ qua toàn bộ pass khi không có
-cặp source/sink phù hợp.
+16 event thật mỗi trace, 256 path, depth lời gọi 3 và 64 lần mở rộng mỗi
+file; event gate bỏ qua toàn bộ pass khi không có cặp source/sink phù hợp.
+Legacy scorer mặc định bỏ các điểm event source/sink đã được summary bao phủ,
+nên path mới không tự cộng trùng với chính nó. Có thể giữ local flow nhưng tắt
+summary bằng `--no-call-summaries`.
 
 Motif gồm credential/file exfiltration, fingerprint transfer, file-to-network,
 download-execute, encoded execution, install-time execution, persistence và
 destructive file action. Mỗi path giữ event index để analyst kiểm chứng.
 
-Giới hạn quan trọng: đây chưa phải interprocedural/whole-program flow. Function
-return, global, object attribute, mutation và dynamic dispatch chưa được theo
-dõi chính xác.
+Giới hạn quan trọng: đây chưa phải interprocedural/whole-program flow tổng
+quát. Summary chỉ hỗ trợ bare call tới function top-level duy nhất, không bị
+rebind trong cùng module. Callable alias, định nghĩa trùng, generator và async
+không có `await` trực tiếp đều không được đoán. Imported/nested function,
+method, global/closure, object attribute, mutation, decorator, exception và
+dynamic dispatch chưa được theo dõi chính xác. Chi tiết thiết kế và
+counterexample nằm ở
+[BOUNDED_CALL_SUMMARIES.md](BOUNDED_CALL_SUMMARIES.md).
 
 ### Hai mô hình
 
@@ -170,12 +187,22 @@ Máy: 2 vCPU, khoảng 8 GB RAM, Python 3.12.1, Linux x86-64.
 | Candidate gate, bật local flow | median 1.193,69 ms; p95 1.331,91 ms; 823,67 file/s |
 | Overhead local flow trên corpus 95/5 | median +2,97%; mean +3,71%; p95 +4,70% |
 | Python allocation peak | 2.782.985 byte; +0,82% so với tắt flow |
+| Local-only trên mix 95/5 direct-call | median 1.287,35 ms; p95 1.472,37 ms; 770,33 file/s |
+| Bật summary trên cùng mix | median 1.298,90 ms; p95 1.468,30 ms; 750,89 file/s |
+| Overhead riêng của summary | mean +2,59%; median +0,90%; p95 -0,28%; allocation +5,27% |
 | Sparse checkpoint | 7.259 byte |
 | µMal FP32 checkpoint | 2.280.321 byte |
 | µMal inference, 2 thread | median 6,49 ms; p95 12,50 ms |
-| Test | 86 Python + 6 browser test pass |
+| Test | 165 Python + 14 browser test pass |
 | Môi trường train PyTorch | 992 MB; không cần cho core/sparse |
 
+Các hàng dataflow đầu tiên được đo ngày 2026-08-12. Ba hàng direct-call được
+đo ngày 2026-08-14 trên 1.000 file sinh trơ, trong đó 5% có source và sink tách
+qua function trực tiếp; hai mode đều bật local flow và chạy tuần tự 21 lượt dưới
+`tracemalloc`. Lượt 21-repeat ngay trước đó đo mean +3,33%, median +3,30%,
+p95 +1,13% và allocation +5,28%. Độ dao động và p95 âm ở lượt mới phản ánh
+nhiễu host, không phải claim tăng tốc. Đây là số chi phí kỹ thuật, không phải
+bằng chứng summary tăng độ chính xác; vẫn cần chạy interleave và đo process RSS.
 Mỗi mode được warm-up rồi đo 21 lượt với tracemalloc. Một probe bảy lượt trước
 khi có candidate gate từng cho median overhead khoảng 20%; kết quả đó dẫn tới
 tối ưu chỉ chạy pass hai trên file có candidate. Corpus benchmark là template
@@ -304,13 +331,19 @@ artifact nào; PyPI holdout vẫn chưa được mở. Báo cáo chi tiết nằ
 3. Đánh giá `inline remote shell execution` ở event-level (ví dụ direct
    `Invoke-WebRequest` + `Invoke-Expression`) trước khi thêm motif; không flag
    text nằm trong test/assert/Dockerfile template.
-4. Mở rộng name resolution theo lexical scope để xử lý parameter/nested callable
-   shadowing, không chỉ module-level shadowing như fix `compile` hiện tại.
-5. Nghiên cứu activation/import reachability có giới hạn để phân biệt code thư
+4. So sánh summary-enabled với local-only trên cùng artifact đã khóa; đo delta
+   false positive/false negative trước khi đổi trọng số policy. Benchmark tổng
+   hợp mới nhất cho median +0,90% (lượt trước +3,30%), nhưng vẫn cần
+   interleave và process RSS.
+5. Đánh giá recall bị mất do các guard lexical mới. Pass hiện chặn parameter
+   và assignment shadowing, duplicate/module rebinding, callable alias mơ hồ,
+   generator creation và async không `await`; chỉ mở lại từng trường hợp khi có
+   resolver và counterexample đủ chặt.
+6. Nghiên cứu activation/import reachability có giới hạn để phân biệt code thư
    viện dormant với hành vi chạy khi import/install mà không dựng full call graph.
-6. So V6 với sparse MalIR trên split mới và đo AURC/calibration/CPU sau khi gate
+7. So V6 với sparse MalIR trên split mới và đo AURC/calibration/CPU sau khi gate
    reference-benign được xác nhận.
-7. Chỉ sau các gate trên mới mở rộng frontend JavaScript hoặc tối ưu model/INT8.
+8. Chỉ sau các gate trên mới mở rộng frontend JavaScript hoặc tối ưu model/INT8.
 
 Bản kế hoạch tiếng Anh đầy đủ, nguồn tham khảo và claim gates nằm trong
 [RESEARCH.md](RESEARCH.md). Contract manifest/prediction nằm trong

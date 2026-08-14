@@ -52,7 +52,7 @@ can make source triage cheaper, more auditable, and reusable across languages.
 
 | Language / frontend | Status | Scope |
 |---|---|---|
-| Python CLI | **Available** | Bounded AST parsing, alias resolution, local value provenance, motifs, and evidence reports |
+| Python CLI | **Available** | Bounded AST parsing, alias resolution, local provenance plus direct-call summaries, motifs, and evidence reports |
 | Python MalIR-Lite | **Available in browser** | Bounded lexical test frontend with conservative `proximity:low` evidence |
 | JavaScript / TypeScript | **Next research milestone** | Package lifecycle hooks, environment, filesystem, process, dynamic evaluation, and network mappings |
 | Go or Rust | **Later research milestone** | Considered after the Python + JavaScript/TypeScript IR contract survives cross-language evaluation |
@@ -68,8 +68,8 @@ token contract, and [the research plan](docs/RESEARCH.md) for claim gates.
   `transform`, and `sink`.
 - Preserves file, line, column, function, phase, operation, target, and
   human-readable evidence.
-- Distinguishes `dataflow:high`, `proximity:low`, and `structural:high`
-  evidence. These are qualitative tiers, not probabilities.
+- Distinguishes `dataflow:high`, `summary:medium`, `proximity:low`, and
+  `structural:high` evidence. These are qualitative tiers, not probabilities.
 - Builds bounded behavior motifs such as source-to-network, download-to-execute,
   encoded execution, install-time execution, and persistence writes.
 - Uses a cheap rule score and invokes a model only inside the configurable
@@ -85,6 +85,9 @@ token contract, and [the research plan](docs/RESEARCH.md) for claim gates.
 - Resolves common import and assignment aliases.
 - Tracks bounded, flow-sensitive local provenance through assignments,
   containers, transforms, comprehensions, and conservative branch joins.
+- Expands unique, unrebound top-level direct calls to depth 3 and 64
+  expansions per file, with lexical-shadow guards, immediate-`await` semantics,
+  generator safeguards, and explicit `summary:medium` evidence.
 - Runs the second AST pass only when events can form a supported behavior path.
 - Bounds files, bytes, events, recursion, directories, and traversal.
 - Skips symlinks and common dependency or build folders.
@@ -151,7 +154,9 @@ is a focused test interface for pasted source or a local `.py` file.
 - The user explicitly selects **Download full model**.
 - The 2,270,984-byte float32 binary is fetched from the same origin.
 - Web Crypto verifies its SHA-256 digest before installation.
-- Source stays in the tab and is never uploaded, imported, or executed.
+- Source stays in the browser and is never uploaded, imported, or executed.
+- The editor is a locally bundled Monaco build with a same-origin worker and a
+  textarea fallback; it makes no CDN request.
 - The full 567,746-parameter µMal checkpoint runs locally in JavaScript.
 - Browser smoke vectors match the PyTorch checkpoint during tests.
 
@@ -164,6 +169,7 @@ results.
 See [the browser architecture and security boundary](docs/WEB_DEMO.md).
 
 ~~~bash
+npm ci
 make web-model
 make test-web
 make web
@@ -171,12 +177,12 @@ make web
 ## CLI reference
 
 ~~~text
-itcs PATH [--json] [--no-dataflow] [--model FILE | --micro-model FILE]
-itcs scan PATH [--json] [--no-dataflow] [--model FILE | --micro-model FILE]
-itcs extract PATH [--compact] [--no-dataflow]
+itcs PATH [--json] [--no-dataflow] [--no-call-summaries] [--model FILE | --micro-model FILE]
+itcs scan PATH [--json] [--no-dataflow] [--no-call-summaries] [--model FILE | --micro-model FILE]
+itcs extract PATH [--compact] [--no-dataflow] [--no-call-summaries]
 itcs train-sparse DATASET -o MODEL
 itcs train-micro DATASET -o CHECKPOINT
-itcs benchmark PATH [--repeats N] [--no-dataflow | --compare-dataflow]
+itcs benchmark PATH [--repeats N] [--no-dataflow | --no-call-summaries | --compare-dataflow | --compare-summaries]
 itcs audit-manifest MANIFEST [--strict] [--json]
 itcs evaluate-predictions PREDICTIONS [--target-fpr RATE] [--json]
 itcs compare-predictions BASELINE CANDIDATE [--target-fpr RATE] [--json]
@@ -222,7 +228,8 @@ and model transfer are measured.
 ### Phase 1 — harden the shared core and Python reference frontend
 
 - Improve package-level aggregation using observed hard negatives.
-- Add bounded function summaries without whole-program graph construction.
+- Bounded direct-call summaries without whole-program graph construction:
+  implemented; evaluation against locked corpora remains pending.
 - Build a provenance-rich, statistically powered evaluation corpus.
 - Freeze validation decisions before opening sealed holdouts.
 - Continue repeated CPU, RSS, and latency profiling.
@@ -300,8 +307,9 @@ See the [V6 development report](docs/CONTEXT_CAUSAL_V6_DEVELOPMENT_2026-08-13.md
 
 ## Measured on the target Codespace
 
-Environment: 2 vCPU, about 8 GB RAM, Python 3.12.1, Linux x86-64. Measurements
-were taken on 2026-08-12.
+Environment: 2 vCPU, about 8 GB RAM, Python 3.12.1, Linux x86-64. The
+local-flow baseline was measured on 2026-08-12; the summary ablation was
+measured on 2026-08-14.
 
 | Component | Result |
 |---|---:|
@@ -310,6 +318,9 @@ were taken on 2026-08-12.
 | Data-flow-off ablation | median 1,159.24 ms; p95 1,272.15 ms |
 | Local-flow overhead on the 95/5 synthetic mix | median +2.97%; p95 +4.70% |
 | Python allocations with local flow | 2,782,985 bytes peak; +0.82% |
+| Local-only flow on 95/5 direct-call mix | median 1,287.35 ms; p95 1,472.37 ms; 770.33 files/s |
+| Summary-enabled flow on the same mix | median 1,298.90 ms; p95 1,468.30 ms; 750.89 files/s |
+| Direct-call summary overhead | mean +2.59%; median +0.90%; p95 -0.28%; peak allocation +5.27% |
 | Sparse smoke checkpoint | 7,259 bytes; 258 active weights |
 | Optional PyTorch environment | 992 MB on disk; not needed by core/sparse |
 | Default full µMal | 567,746 parameters; 2,280,321-byte FP32 checkpoint |
@@ -317,12 +328,20 @@ were taken on 2026-08-12.
 | µMal single-example inference, 2 threads | median 6.49 ms; p95 12.50 ms |
 | OMCBench pilot, 400 archives / 10,208 Python files | 158.78 s end to end |
 
-These measurements describe cost, not detection quality. Language comparisons
-must use aligned, leakage-audited datasets and independently locked thresholds.
+These measurements describe cost, not detection quality. The direct-call
+ablation used 1,000 generated inert files, 5% of which contain a source and sink
+split across direct functions; both modes used 21 sequential repeats under
+`tracemalloc`. An immediately preceding 21-repeat run measured +3.30%
+median and +1.13% p95 overhead; the spread and negative latest p95 reflect host
+noise, not a speedup claim. This is not an efficacy result, an interleaved
+host-noise study, or a process-RSS measurement. Language comparisons must use
+aligned, leakage-audited datasets and independently locked thresholds.
 
 ~~~bash
 .venv/bin/python scripts/benchmark_corpus.py --files 1000 \
   --repeats 21 --compare-dataflow
+.venv/bin/python scripts/benchmark_corpus.py --files 1000 \
+  --repeats 21 --compare-summaries
 .venv/bin/python scripts/benchmark_micro.py artifacts/micro.pt --repeats 300
 ~~~
 
@@ -336,16 +355,19 @@ must use aligned, leakage-audited datasets and independently locked thresholds.
 | `high-risk` | Strong or accumulated static evidence; not final attribution |
 
 Every result retains the operations and source locations that produced its
-score. `dataflow:high` means bounded provenance reached the displayed sink.
-`proximity:low` is a same-scope fallback. `structural:high` requires no value
-flow. None is whole-program proof or a calibrated malware probability.
+score. `dataflow:high` means bounded provenance reached the displayed sink
+inside one callable. `summary:medium` crosses an eligible unique, unrebound
+direct-call boundary. `proximity:low` is a same-scope fallback.
+`structural:high` requires no value flow. None is whole-program proof or a
+calibrated malware probability.
+
 ## Repository map
 
 | Path | Purpose |
 |---|---|
 | `src/malir/extractor.py` | Current Python AST frontend and API mappings |
-| `src/malir/flow.py` | Bounded local value provenance |
-| `src/malir/motifs.py` | Data-flow, proximity, and structural motif policy |
+| `src/malir/flow.py` | Bounded local provenance and direct-call summaries |
+| `src/malir/motifs.py` | Data-flow, summary, proximity, and structural motif policy |
 | `src/malir/detector.py` | Evidence weights and uncertainty gate |
 | `src/malir/model.py` | Dependency-free sparse classifier |
 | `src/malir/microlm.py` | Full µMal Transformer and training loop |
@@ -356,6 +378,7 @@ flow. None is whole-program proof or a calibrated malware probability.
 | `web/` | Browser test interface and on-demand full µMal runtime |
 | `scripts/train_web_model.py` | Full checkpoint trainer and browser exporter |
 | `docs/MALIR_SPEC.md` | Language-neutral IR contract |
+| `docs/BOUNDED_CALL_SUMMARIES.md` | Direct-call summary design and limits |
 | `docs/WEB_DEMO.md` | Browser architecture and security boundary |
 | `docs/EVALUATION_PROTOCOL.md` | Leakage and low-FPR evaluation protocol |
 | `docs/RESEARCH.md` | Research questions, evidence, and language roadmap |
@@ -366,9 +389,13 @@ flow. None is whole-program proof or a calibrated malware probability.
 ## Known limits
 
 Version 0.6 has one production language frontend: Python. It performs bounded
-intraprocedural provenance, not full interprocedural or whole-program flow. It
-does not precisely summarize calls, attributes, mutation, native payloads,
-arbitrary obfuscation, runtime-only behavior, or every package lifecycle.
+intraprocedural provenance plus summaries for unique, unrebound top-level calls
+in the same module, not general interprocedural or whole-program flow. Callable
+aliases, duplicate/rebound definitions, generators, and unawaited async calls
+are not guessed. It does not precisely model imported or nested calls, methods,
+globals, attributes, mutation, native payloads, arbitrary obfuscation,
+runtime-only behavior, or every package lifecycle.
+
 The normal CLI does not yet scan archives directly; the research reader handles
 bounded Python members in isolated workflows without extracting them. The
 browser uses a smaller lexical frontend and cannot provide AST-level proof.
@@ -404,6 +431,7 @@ Run the relevant checks before opening a pull request:
 ~~~bash
 make lint
 make test
+npm ci
 make test-web
 ~~~
 

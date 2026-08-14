@@ -5,12 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "is-this-code-safe"
 version = "0.6.0"
-description = "CPU-first, evidence-first malicious Python source analysis"
+description = "CPU-first malicious source analysis built on language-neutral MalIR"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [{name = "ITCS contributors"}]
-keywords = ["malware-analysis", "static-analysis", "security", "python"]
+keywords = [
+    "malware-analysis",
+    "static-analysis",
+    "security",
+    "intermediate-representation",
+]
 dependencies = []
 
 [project.optional-dependencies]

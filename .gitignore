@@ -10,3 +10,4 @@ coverage.xml
 *.model.json
 benchmark-results.json
 artifacts/
+node_modules/

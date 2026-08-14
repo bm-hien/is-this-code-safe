@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from .detector import CascadeConfig, ProbabilityModel, decide
@@ -42,13 +42,24 @@ class Scanner:
         cascade: CascadeConfig | None = None,
         *,
         enable_dataflow: bool = True,
+        enable_call_summaries: bool = True,
     ) -> None:
         self.model = model
         self.limits = limits or ScanLimits()
         self.cascade = cascade or CascadeConfig()
         self.enable_dataflow = enable_dataflow
+        self.enable_call_summaries = enable_dataflow and enable_call_summaries
+        extractor_limits = ExtractorLimits(
+            max_file_bytes=self.limits.max_file_bytes,
+        )
+        if not self.enable_call_summaries:
+            extractor_limits = replace(
+                extractor_limits,
+                max_call_depth=0,
+                max_call_expansions=0,
+            )
         self.extractor = PythonExtractor(
-            ExtractorLimits(max_file_bytes=self.limits.max_file_bytes),
+            extractor_limits,
             enable_dataflow=enable_dataflow,
         )
 

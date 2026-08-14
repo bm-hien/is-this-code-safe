@@ -54,15 +54,24 @@ MOTIF_POLICIES = {
 }
 
 
-def make_dataflow_path(motif: str, indexes: tuple[int, ...]) -> BehaviorPath:
+def make_dataflow_path(
+    motif: str,
+    indexes: tuple[int, ...],
+    *,
+    through_summary: bool = False,
+) -> BehaviorPath:
     policy = MOTIF_POLICIES[motif]
     return BehaviorPath(
         motif=motif,
         score=policy.dataflow_score,
-        reason=policy.reason,
+        reason=(
+            f"{policy.reason}; bounded direct-call summary"
+            if through_summary
+            else policy.reason
+        ),
         event_indexes=indexes,
-        evidence_kind="dataflow",
-        confidence="high",
+        evidence_kind="summary" if through_summary else "dataflow",
+        confidence="medium" if through_summary else "high",
     )
 
 
@@ -71,18 +80,19 @@ def build_behavior_paths(
     dataflow_paths: list[BehaviorPath] | None = None,
     window: int = 12,
 ) -> list[BehaviorPath]:
-    """Combine exact local flows, weak proximity fallbacks, and structural paths.
+    """Combine causal flows, weak proximity fallbacks, and structural paths.
 
-    Data-flow evidence is preferred whenever the same source/sink endpoints are
-    available. Proximity remains visible for analyst review but has deliberately
-    low weight so unrelated operations do not become a strong alert.
+    Local data flow and bounded direct-call summaries are preferred whenever the
+    same source/sink endpoints are available. Proximity remains visible for
+    analyst review but has deliberately low weight so unrelated operations do
+    not become a strong alert.
     """
     paths = list(dataflow_paths or [])
     seen = {(item.motif, item.event_indexes, item.evidence_kind) for item in paths}
     exact_endpoints = {
         (item.motif, source_index, item.event_indexes[-1])
         for item in paths
-        if item.evidence_kind == "dataflow"
+        if item.evidence_kind in {"dataflow", "summary"}
         for source_index in item.event_indexes[:-1]
     }
 
