@@ -129,9 +129,11 @@ function makeEvidenceItem(item) {
   const provenance = item.evidenceKind
     ? " · " + item.evidenceKind + ":" + item.confidence
     : "";
+  const occurrences =
+    item.occurrences > 1 ? " ×" + item.occurrences : "";
   operation.textContent = item.motif
-    ? item.op + " · " + item.motif + provenance
-    : item.op;
+    ? item.op + occurrences + " · " + item.motif + provenance
+    : item.op + occurrences;
 
   const reason = document.createElement("p");
   reason.textContent = item.reason;
@@ -147,8 +149,11 @@ function makeEvidenceItem(item) {
 function renderEvidence(report) {
   clearChildren(elements.evidenceList);
   const count = report.evidence.length;
+  const collapsed = report.suppressedEvidenceCount || 0;
   elements.evidenceCount.textContent =
-    count + (count === 1 ? " signal" : " signals");
+    count +
+    (count === 1 ? " unique signal" : " unique signals") +
+    (collapsed ? " · " + collapsed + " repeats collapsed" : "");
   if (!count) {
     const item = document.createElement("li");
     item.className = "empty-state";
@@ -209,22 +214,37 @@ function renderReport(report) {
   elements.verdictBadge.className = "verdict-badge " + report.verdict;
   elements.verdictBadge.textContent = report.verdict;
   elements.ruleScore.textContent = report.ruleScore.toFixed(0) + " / 100";
-  elements.modelScore.textContent = model.used
+  elements.modelScore.textContent = model.consulted
     ? (model.probability * 100).toFixed(1) + "%"
-    : "gated off";
+    : "not loaded";
   elements.latency.textContent = report.elapsedMs.toFixed(1) + " ms";
   setGauge(report.riskScore);
 
-  if (model.used) {
+  if (model.consulted) {
+    const windows = model.windows === 1 ? "1 window" : model.windows + " windows";
+    const coverage =
+      model.tokensEvaluated + " semantic tokens · " + windows;
     elements.modelTitle.textContent = metadata.name + " consulted";
-    elements.modelCopy.textContent =
-      metadata.parameters.toLocaleString() +
-      " parameters · probability contributes 35% inside the uncertainty gate";
+    if (model.used) {
+      elements.modelCopy.textContent =
+        metadata.parameters.toLocaleString() +
+        " parameters · " +
+        coverage +
+        " · probability contributes 35% inside the uncertainty gate";
+    } else {
+      const boundary = model.gate === "below" ? "below 20" : "above 80";
+      elements.modelCopy.textContent =
+        metadata.parameters.toLocaleString() +
+        " parameters · " +
+        coverage +
+        " · probability shown for audit; rule score " +
+        boundary +
+        " keeps the deterministic score unchanged";
+    }
   } else {
-    elements.modelTitle.textContent = metadata.name + " ready";
+    elements.modelTitle.textContent = "µMal Full not loaded";
     elements.modelCopy.textContent =
-      metadata.parameters.toLocaleString() +
-      " parameters · rule score outside the 20–80 uncertainty gate";
+      "Download the model to include an advisory probability.";
   }
 
   renderEvidence(report);

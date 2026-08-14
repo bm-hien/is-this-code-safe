@@ -9,11 +9,12 @@ def _event(
     line: int,
     function: str = "scan",
     path: str = "pkg.py",
+    target: str = "x",
 ) -> Event:
     return Event(
         op=op,
         category="sink",
-        target="x",
+        target=target,
         path=path,
         line=line,
         column=0,
@@ -35,6 +36,87 @@ def _analysis(
         events=events,
         behavior_paths=paths or [],
     )
+
+
+class _RecordingModel:
+    def __init__(self, probability: float = 0.9) -> None:
+        self.probability = probability
+        self.calls: list[list[str]] = []
+
+    def predict_proba(self, tokens: list[str]) -> float:
+        self.calls.append(tokens)
+        return self.probability
+
+
+def _repeated_exfil_analysis(repeats: int) -> FileAnalysis:
+    events = [
+        _event("ENV_READ", 1, target="CI_TOKEN"),
+        _event("ENCODE", 2, target="base64.b64encode"),
+        *[
+            _event(
+                "NETWORK_SEND",
+                3 + index,
+                target=f"https://collector{index}.invalid/upload",
+            )
+            for index in range(repeats)
+        ],
+    ]
+    paths = [
+        BehaviorPath(
+            motif="credential_or_file_exfil",
+            score=2.0,
+            reason="nearby only",
+            event_indexes=(0, 2 + index),
+            evidence_kind="proximity",
+            confidence="low",
+        )
+        for index in range(repeats)
+    ]
+    return _analysis(events, paths)
+
+
+def test_semantic_default_is_invariant_to_repeated_sink_spam():
+    single = decide([_repeated_exfil_analysis(1)])
+    spammed = decide([_repeated_exfil_analysis(20)])
+
+    assert single.rule_score == 28.0
+    assert spammed.rule_score == single.rule_score
+    assert len(spammed.evidence) == 4
+    assert (
+        next(item for item in spammed.evidence if item.op == "NETWORK_SEND").occurrences
+        == 20
+    )
+    assert (
+        next(
+            item
+            for item in spammed.evidence
+            if item.motif == "credential_or_file_exfil"
+        ).occurrences
+        == 20
+    )
+
+
+def test_model_input_is_semantically_compacted_before_inference():
+    single_model = _RecordingModel()
+    spam_model = _RecordingModel()
+    single = decide([_repeated_exfil_analysis(1)], single_model)
+    spammed = decide([_repeated_exfil_analysis(20)], spam_model)
+
+    assert single_model.calls == spam_model.calls
+    assert spammed.risk_score == pytest.approx(single.risk_score)
+    assert spammed.model_consulted is True
+    assert spammed.model_used is True
+
+
+def test_model_is_consulted_but_advisory_outside_decision_gate():
+    model = _RecordingModel(probability=0.99)
+    result = decide([_analysis([])], model)
+
+    assert model.calls == [[]]
+    assert result.model_probability == 0.99
+    assert result.model_consulted is True
+    assert result.model_used is False
+    assert result.risk_score == 0.0
 
 
 def test_context_max_deduplicates_and_does_not_sum_functions():
@@ -66,7 +148,10 @@ def test_context_max_deduplicates_and_does_not_sum_functions():
     ]
     analysis = _analysis(events, paths)
 
-    legacy = decide([analysis])
+    legacy = decide(
+        [analysis],
+        config=CascadeConfig(rule_aggregation="legacy-top8"),
+    )
     candidate = decide(
         [analysis],
         config=CascadeConfig(rule_aggregation="context-max-v1"),
@@ -75,7 +160,13 @@ def test_context_max_deduplicates_and_does_not_sum_functions():
     assert legacy.rule_score == 100.0
     assert candidate.rule_score == 67.0
     assert candidate.verdict == "suspicious"
-    assert len(candidate.evidence) == 8
+    assert len(candidate.evidence) == 6
+    assert (
+        next(
+            item for item in candidate.evidence if item.op == "SENSITIVE_FILE_READ"
+        ).occurrences
+        == 2
+    )
 
 
 def test_context_max_uses_maximum_context_instead_of_package_sum():
@@ -86,7 +177,13 @@ def test_context_max_uses_maximum_context_instead_of_package_sum():
         ]
     )
 
-    assert decide([analysis]).rule_score == 54.0
+    assert (
+        decide(
+            [analysis],
+            config=CascadeConfig(rule_aggregation="legacy-top8"),
+        ).rule_score
+        == 54.0
+    )
     assert (
         decide(
             [analysis],
@@ -346,4 +443,10 @@ def test_legacy_summary_does_not_stack_its_constituent_events():
         ],
     )
 
-    assert decide([analysis]).rule_score == 36.0
+    assert (
+        decide(
+            [analysis],
+            config=CascadeConfig(rule_aggregation="legacy-top8"),
+        ).rule_score
+        == 36.0
+    )

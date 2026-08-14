@@ -489,14 +489,38 @@ function runModel(identifiers) {
   return suspicious / (clean + suspicious);
 }
 
-export function predictFullModel(tokens) {
+export function predictFullModelDetails(tokens) {
   if (!activeModel) {
     throw new Error("Download the full µMal model before analysis.");
   }
   if (!Array.isArray(tokens) || tokens.some((token) => typeof token !== "string")) {
     throw new TypeError("Model tokens must be an array of strings.");
   }
-  return runModel(encodeTokens(tokens, activeModel.config));
+
+  const width = activeModel.config.max_length - 2;
+  const overlap = Math.min(32, Math.max(0, width - 1));
+  const stride = Math.max(1, width - overlap);
+  const probabilities = [];
+  let start = 0;
+  let covered = 0;
+  while (probabilities.length < 16) {
+    const window = tokens.slice(start, start + width);
+    probabilities.push(runModel(encodeTokens(window, activeModel.config)));
+    covered = Math.max(covered, start + window.length);
+    if (start + width >= tokens.length) break;
+    start += stride;
+  }
+  return {
+    probability: Math.max(...probabilities),
+    windows: probabilities.length,
+    tokensEvaluated: Math.min(tokens.length, covered),
+    truncated: covered < tokens.length,
+  };
+}
+
+export function predictFullModel(tokens) {
+  return predictFullModelDetails(tokens).probability;
 }
 
 export const predictMicro = predictFullModel;
+export const predictMicroDetails = predictFullModelDetails;

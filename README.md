@@ -72,8 +72,11 @@ token contract, and [the research plan](docs/RESEARCH.md) for claim gates.
   `structural:high` evidence. These are qualitative tiers, not probabilities.
 - Builds bounded behavior motifs such as source-to-network, download-to-execute,
   encoded execution, install-time execution, and persistence writes.
-- Uses a cheap rule score and invokes a model only inside the configurable
-  20–80 uncertainty gate.
+- Scores semantic evidence novelty rather than source-line frequency; repeated
+  operations and motifs retain occurrence counts without repeatedly adding risk.
+- Consults an optional model over a spam-compacted, bounded sequence. Its
+  probability changes the final score only inside the configurable 20–80
+  uncertainty gate and remains advisory outside it.
 - Includes a dependency-free hashed online logistic classifier.
 - Includes full µMal: a 567,746-parameter behavior Transformer trained from
   scratch with classification and masked-token objectives.
@@ -158,6 +161,10 @@ is a focused test interface for pasted source or a local `.py` file.
 - The editor is a locally bundled Monaco build with a same-origin worker and a
   textarea fallback; it makes no CDN request.
 - The full 567,746-parameter µMal checkpoint runs locally in JavaScript.
+- Equivalent URL/sink repetitions collapse into one score and one model token;
+  raw events and occurrence counts remain available for review.
+- µMal evaluates compacted input in bounded overlapping windows instead of
+  silently ignoring behavior after its first 256-token context.
 - Browser smoke vectors match the PyTorch checkpoint during tests.
 
 The browser currently uses Python MalIR-Lite because GitHub Pages cannot run the
@@ -227,7 +234,8 @@ and model transfer are measured.
 
 ### Phase 1 — harden the shared core and Python reference frontend
 
-- Improve package-level aggregation using observed hard negatives.
+- Semantic repeat saturation is implemented; package-level calibration against
+  observed hard negatives and locked holdouts remains pending.
 - Bounded direct-call summaries without whole-program graph construction:
   implemented; evaluation against locked corpora remains pending.
 - Build a provenance-rich, statistically powered evaluation corpus.

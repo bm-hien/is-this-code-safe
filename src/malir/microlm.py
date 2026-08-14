@@ -125,6 +125,27 @@ class HashedTokenizer:
         mask.extend([0] * padding)
         return ids, mask
 
+    def encode_windows(
+        self,
+        tokens: list[str],
+        *,
+        overlap: int = 32,
+        max_windows: int = 16,
+    ) -> list[tuple[list[int], list[int]]]:
+        if overlap < 0 or max_windows < 1:
+            raise ValueError("overlap must be non-negative and max_windows positive")
+        width = self.config.max_length - 2
+        overlap = min(overlap, max(0, width - 1))
+        stride = max(1, width - overlap)
+        windows: list[tuple[list[int], list[int]]] = []
+        start = 0
+        while len(windows) < max_windows:
+            windows.append(self.encode(tokens[start : start + width]))
+            if start + width >= len(tokens):
+                break
+            start += stride
+        return windows
+
 
 class MicroMalPredictor:
     def __init__(self, model: MicroMal) -> None:
@@ -151,12 +172,12 @@ class MicroMalPredictor:
         return cls(model)
 
     def predict_proba(self, tokens: list[str]) -> float:
-        ids, mask = self.tokenizer.encode(tokens)
-        input_ids = torch.tensor([ids], dtype=torch.long)
-        attention = torch.tensor([mask], dtype=torch.bool)
+        windows = self.tokenizer.encode_windows(tokens)
+        input_ids = torch.tensor([ids for ids, _ in windows], dtype=torch.long)
+        attention = torch.tensor([mask for _, mask in windows], dtype=torch.bool)
         with torch.inference_mode():
             logits, _ = self.model(input_ids, attention)
-            return float(torch.softmax(logits, dim=-1)[0, 1])
+            return float(torch.softmax(logits, dim=-1)[:, 1].max())
 
     @property
     def parameter_count(self) -> int:

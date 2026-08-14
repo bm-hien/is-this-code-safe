@@ -108,6 +108,7 @@ class Scanner:
             risk_score=decision.risk_score,
             rule_score=decision.rule_score,
             model_probability=decision.model_probability,
+            model_consulted=decision.model_consulted,
             model_used=decision.model_used,
             files_scanned=len(analyses),
             files_skipped=skipped,

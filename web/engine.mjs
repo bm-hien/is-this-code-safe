@@ -3,6 +3,7 @@ import {
   installFullModel,
   loadFullModel,
   predictMicro,
+  predictMicroDetails,
   unloadFullModel,
 } from "./full-model-runtime.mjs";
 
@@ -11,6 +12,7 @@ export {
   installFullModel,
   loadFullModel,
   predictMicro,
+  predictMicroDetails,
   unloadFullModel,
 };
 
@@ -702,9 +704,104 @@ function buildMotifs(events, windowSize = 12) {
   return motifs.sort((left, right) => right.score - left.score);
 }
 
+function aggregateEvidence(events, motifs, fileName) {
+  const raw = [];
+  events.forEach((event) => {
+    const score = EVENT_WEIGHTS[event.op] || 0;
+    if (!score) return;
+    raw.push({
+      key: `event:${event.op}`,
+      item: {
+        score,
+        reason: event.detail,
+        path: fileName,
+        line: event.line,
+        op: event.op,
+        motif: null,
+        occurrences: 1,
+      },
+    });
+  });
+  motifs.forEach((motif) => {
+    const first = events[motif.eventIndexes[0]];
+    raw.push({
+      key: `motif:${motif.motif}:${motif.evidenceKind}`,
+      item: {
+        score: motif.score,
+        reason: motif.reason,
+        path: fileName,
+        line: first?.line || 0,
+        op: "BEHAVIOR_PATH",
+        motif: motif.motif,
+        evidenceKind: motif.evidenceKind,
+        confidence: motif.confidence,
+        occurrences: 1,
+      },
+    });
+  });
+
+  const groups = new Map();
+  for (const entry of raw) {
+    const group = groups.get(entry.key);
+    if (!group) {
+      groups.set(entry.key, { ...entry.item });
+      continue;
+    }
+    group.occurrences += 1;
+    if (
+      entry.item.score > group.score ||
+      (entry.item.score === group.score && entry.item.line < group.line)
+    ) {
+      const occurrences = group.occurrences;
+      Object.assign(group, entry.item, { occurrences });
+    }
+  }
+  const evidence = [...groups.values()].sort(
+    (left, right) =>
+      right.score - left.score ||
+      left.line - right.line ||
+      left.op.localeCompare(right.op),
+  );
+  return {
+    evidence,
+    ruleScore: Math.min(
+      100,
+      evidence.slice(0, 8).reduce((total, item) => total + item.score, 0),
+    ),
+    suppressedEvidenceCount: raw.length - evidence.length,
+  };
+}
+
+function modelTargetClass(event) {
+  const target = String(event.target || "")
+    .toLowerCase()
+    .replaceAll("\\", "/")
+    .replaceAll(" ", "_");
+  if (["NETWORK_SEND", "NETWORK_RECEIVE"].includes(event.op)) return "network";
+  if (["SENSITIVE_FILE_READ", "PERSISTENCE_WRITE"].includes(event.op)) {
+    return "sensitive";
+  }
+  if (containsMarker(target, SENSITIVE_MARKERS)) return "sensitive";
+  if (["FILE_READ", "FILE_WRITE", "FILE_DELETE"].includes(event.op)) {
+    return "file";
+  }
+  if (target.includes("/") || target.startsWith(".")) return "path";
+  return "generic";
+}
+
 function canonicalTokens(events, motifs, fileName) {
   const tokens = [`FILE:${fileName}`];
+  const seen = new Set();
   for (const event of events) {
+    const key = [
+      "event",
+      event.phase,
+      event.category,
+      event.op,
+      modelTargetClass(event),
+    ].join(":");
+    if (seen.has(key)) continue;
+    seen.add(key);
     const target = String(event.target || "unknown")
       .toLowerCase()
       .replaceAll(" ", "_");
@@ -712,7 +809,12 @@ function canonicalTokens(events, motifs, fileName) {
       `P:${event.phase}|C:${event.category}|O:${event.op}|T:${target}`,
     );
   }
-  tokens.push(...motifs.map((motif) => `MOTIF:${motif.motif}`));
+  for (const motif of motifs) {
+    const key = `motif:${motif.motif}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tokens.push(`MOTIF:${motif.motif}`);
+  }
   return tokens;
 }
 
@@ -741,50 +843,24 @@ export function analyzeSource(source, fileName = "sample.py") {
 
   const events = extractEvents(source, fileName);
   const motifs = buildMotifs(events);
-  const evidence = [];
-
-  for (const event of events) {
-    const score = EVENT_WEIGHTS[event.op] || 0;
-    if (score) {
-      evidence.push({
-        score,
-        reason: event.detail,
-        path: fileName,
-        line: event.line,
-        op: event.op,
-        motif: null,
-      });
-    }
-  }
-  for (const motif of motifs) {
-    const first = events[motif.eventIndexes[0]];
-    evidence.push({
-      score: motif.score,
-      reason: motif.reason,
-      path: fileName,
-      line: first?.line || 0,
-      op: "BEHAVIOR_PATH",
-      motif: motif.motif,
-      evidenceKind: motif.evidenceKind,
-      confidence: motif.confidence,
-    });
-  }
-  evidence.sort(
-    (left, right) =>
-      right.score - left.score ||
-      left.line - right.line ||
-      left.op.localeCompare(right.op),
-  );
-
-  const ruleScore = Math.min(
-    100,
-    evidence.slice(0, 8).reduce((total, item) => total + item.score, 0),
-  );
+  const aggregation = aggregateEvidence(events, motifs, fileName);
+  const { evidence, ruleScore, suppressedEvidenceCount } = aggregation;
   const modelStatus = getFullModelStatus();
-  const modelUsed =
-    modelStatus.loaded && ruleScore >= 20 && ruleScore <= 80;
   const modelTokens = canonicalTokens(events, motifs, fileName);
-  const modelProbability = modelUsed ? predictMicro(modelTokens) : null;
+  const modelConsulted = modelStatus.loaded;
+  const modelResult = modelConsulted
+    ? predictMicroDetails(modelTokens)
+    : null;
+  const modelProbability = modelResult?.probability ?? null;
+  const modelUsed =
+    modelConsulted && ruleScore >= 20 && ruleScore <= 80;
+  const modelGate = !modelConsulted
+    ? "unavailable"
+    : modelUsed
+      ? "inside"
+      : ruleScore < 20
+        ? "below"
+        : "above";
   const riskScore = modelUsed
     ? 100 * (0.65 * (ruleScore / 100) + 0.35 * modelProbability)
     : ruleScore;
@@ -801,18 +877,31 @@ export function analyzeSource(source, fileName = "sample.py") {
     bytes,
     elapsedMs: ended - started,
     evidence: evidence.slice(0, 12),
+    suppressedEvidenceCount,
     events,
     motifs,
     modelTokens,
     model: {
       loaded: modelStatus.loaded,
+      consulted: modelConsulted,
       used: modelUsed,
+      gate: modelGate,
       probability: modelProbability,
+      windows: modelResult?.windows ?? 0,
+      tokensEvaluated: modelResult?.tokensEvaluated ?? 0,
+      truncated: modelResult?.truncated ?? false,
+      suppressedTokens: Math.max(
+        0,
+        events.length + motifs.length - (modelTokens.length - 1),
+      ),
       metadata: modelStatus.metadata,
     },
     warnings: [
       "Browser demo uses the MalIR-Lite lexical frontend; install the Python CLI for AST-accurate analysis.",
       "A low-signal result is not proof that code is safe.",
+      ...(modelResult?.truncated
+        ? ["The bounded model window limit was reached; rules still evaluated all extracted events."]
+        : []),
     ],
   };
 }

@@ -51,9 +51,13 @@ P:<phase>|C:<category>|O:<operation>|T:<normalized-target>
 ~~~
 
 Behavior paths append a token of the form MOTIF:<name>. File boundaries are
-added by the detector before model input. Sparse features use signed BLAKE2b
-hashing over one-to-three-token n-grams. µMal uses a separately personalized
-BLAKE2b hash into a fixed 4,096-token default vocabulary.
+added by the detector before model input. The serialized file record retains
+the complete deterministic token list. The detector separately compacts model
+input by phase, category, operation, and a coarse target class so repeated
+syntax cannot crowd later semantic behavior out of a bounded model context.
+Sparse features use signed BLAKE2b hashing over one-to-three-token n-grams.
+µMal uses a separately personalized BLAKE2b hash into a fixed 4,096-token
+default vocabulary.
 
 Hashing makes the representation compact and streaming-friendly. Collisions are
 possible and must be measured as an ablation against learned or explicit
@@ -147,15 +151,29 @@ research basis, conservative cases, and regression matrix.
 
 MalIR contains observations; detector weights and verdict thresholds are policy.
 This separation allows the same IR to feed rules, sparse models, µMal, graph
-models, or external review without changing extraction. Summary paths retain
-the existing numeric motif policy, but the default legacy aggregator removes
-their covered source/sink event contributions so a new summary does not stack
-with itself. Older evidence aggregation remains unchanged.
+models, or external review without changing extraction.
 
-The default cascade calls a supplied model only when the rule score is from 20
-through 80. Model probability is combined with the rule score at 35%/65%.
-Those constants are initial policy values and require calibration on a
-time-split validation set.
+The default `semantic-top8-v1` policy groups equivalent event operations and
+equivalent motif/evidence-kind pairs across the scan. Each group contributes
+its maximum policy weight once, while report evidence retains an `occurrences`
+count and the raw IR retains every event. The eight strongest distinct groups
+are summed with a hard 100-point cap. This makes the rule score invariant to
+copying the same URL, sink, or motif onto more source lines. Summary paths also
+remove their covered source/sink event contributions. `legacy-top8` remains
+available explicitly for reproducing earlier research baselines.
+
+A supplied model is consulted over the compacted sequence even outside the
+decision gate, so its probability remains observable for audit. The probability
+changes the final score only when the rule score is from 20 through 80; inside
+that gate it is combined with the rule score at 35%/65%. JSON distinguishes
+`model_consulted` from `model_used`, where the latter means that probability
+affected the decision.
+
+µMal evaluates at most 254 behavior tokens plus boundary tokens per window.
+Longer compacted sequences use up to 16 overlapping windows and return the
+maximum window probability rather than summing probabilities. These aggregation
+and gate constants are bounded policy choices, not calibrated accuracy claims,
+and require time-split validation.
 
 ## Versioning
 

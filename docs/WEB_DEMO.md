@@ -75,6 +75,32 @@ uses Python's bounded `ast` parser plus candidate-gated local value provenance.
 Its `dataflow:high` and the browser's `proximity:low` labels are qualitative
 evidence tiers, not calibrated probabilities.
 
+## Semantic saturation
+
+Rule scoring groups equivalent event operations and equivalent
+motif/evidence-kind pairs before selecting the strongest eight distinct
+signals. Repeating the same outbound call therefore increases an
+`occurrences` counter but does not add the operation or motif weight again.
+The full event and motif arrays remain in JSON for audit.
+
+The model input applies a separate compaction key using phase, category,
+operation, and a coarse target class. Network destinations share a network
+class, so changing or repeating URL text cannot crowd other behaviors out of
+the model sequence. The representative MalIR token remains inspectable; this
+is input canonicalization, not a claim that frequency never matters.
+
+The committed adversarial regression repeats the screenshot's outbound call
+while varying later URLs:
+
+| Outbound calls | Unique weighted signals | Rule score | Model tokens | Risk score |
+|---:|---:|---:|---:|---:|
+| 1 | 4 | 28 | 6 | 53.02 |
+| 4 | 4 | 28 | 6 | 53.02 |
+| 20 | 4 | 28 | 6 | 53.02 |
+
+This establishes repeat invariance for that transformation only; it is not an
+accuracy or false-positive-rate result.
+
 ## Full µMal model
 
 The browser runs the same full µMal architecture and checkpoint exported for
@@ -86,7 +112,7 @@ the Python CLI. It is a local Transformer encoder, not a remote LLM call:
 | Attention heads | 4 |
 | Hidden width | 96 |
 | Feed-forward width | 192 |
-| Maximum sequence | 256 hashed behavior tokens |
+| Model context | 256 hashed tokens per window; up to 16 overlapping windows |
 | Hashed vocabulary | 4,096 |
 | Trainable parameters | 567,746 |
 | On-demand float32 binary | 2,270,984 bytes |
@@ -99,13 +125,21 @@ checkpoint. Generated smoke vectors verify browser probabilities against
 PyTorch during JavaScript tests.
 
 The input is a sequence of full MalIR-style phase, category, operation, target,
-file, and motif tokens, not raw source. Rule scores outside 20–80 bypass model
-inference; inside that uncertainty gate, the final score is 65% evidence score
-and 35% model probability.
+file, and motif tokens, not raw source. A 32-token overlap carries local context
+between windows, and the maximum bounded window probability is reported rather
+than adding probabilities as source size grows.
 
-The bundled corpus is designed only to test plumbing. Its output must not be
-used as a real-world efficacy claim. Real claims require project/family-
-disjoint, time-aware evaluation under `docs/EVALUATION_PROTOCOL.md`.
+After the checkpoint has been downloaded, every analysis consults µMal and
+shows its probability. Inside the 20–80 uncertainty gate, the final score is 65%
+evidence score and 35% model probability. Outside that gate, the probability is
+advisory and the deterministic score remains unchanged; the UI no longer calls
+this state “gated off.” JSON reports the gate state, window count, evaluated
+token count, and whether input hit the window bound.
+
+The bundled corpus is designed only to test plumbing. Semantic saturation and
+windowing establish robustness invariants, not detection accuracy. Real claims
+require project/family-disjoint, time-aware evaluation under
+`docs/EVALUATION_PROTOCOL.md`.
 
 Export the existing full checkpoint for the browser:
 

@@ -1,4 +1,4 @@
-"""Evidence-first scoring and conditional model execution."""
+"""Evidence-first scoring, semantic saturation, and conditional model fusion."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from heapq import nlargest
 from typing import Literal, Protocol
 
-from .types import Evidence, FileAnalysis
+from .types import Event, Evidence, FileAnalysis
 
 
 class ProbabilityModel(Protocol):
@@ -14,6 +14,7 @@ class ProbabilityModel(Protocol):
 
 
 RuleAggregation = Literal[
+    "semantic-top8-v1",
     "legacy-top8",
     "context-max-v1",
     "context-cover-v2",
@@ -45,6 +46,22 @@ AUXILIARY_PATH_SEGMENTS = {
 }
 
 
+MODEL_SENSITIVE_TARGET_MARKERS = {
+    "credential",
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "private_key",
+    "id_rsa",
+    "id_ed25519",
+    "cookie",
+    "wallet",
+}
+
+
 EVENT_WEIGHTS = {
     "DYNAMIC_EXEC": 27.0,
     "PROCESS_EXEC": 18.0,
@@ -69,7 +86,7 @@ class CascadeConfig:
     high_gate: float = 80.0
     rule_weight: float = 0.65
     max_evidence: int = 12
-    rule_aggregation: RuleAggregation = "legacy-top8"
+    rule_aggregation: RuleAggregation = "semantic-top8-v1"
 
 
 @dataclass(slots=True)
@@ -77,6 +94,7 @@ class Decision:
     risk_score: float
     rule_score: float
     model_probability: float | None
+    model_consulted: bool
     model_used: bool
     verdict: str
     evidence: list[Evidence]
@@ -165,34 +183,32 @@ def decide(
                 )
             )
 
-    ranked = sorted(
-        (item.evidence for item in contextual),
-        key=lambda item: (-item.score, item.path, item.line, item.op),
-    )
+    ranked = _rank_evidence(contextual)
     rule_score = _aggregate_rule_score(
         contextual,
         config.rule_aggregation,
     )
-    tokens: list[str] = []
-    for item in files:
-        tokens.append(f"FILE:{item.path}")
-        tokens.extend(item.tokens)
+    tokens = _model_tokens(files)
 
     probability: float | None = None
+    model_consulted = False
     model_used = False
     risk_score = rule_score
-    if model is not None and config.low_gate <= rule_score <= config.high_gate:
+    if model is not None:
         probability = model.predict_proba(tokens)
-        risk_score = 100.0 * (
-            config.rule_weight * (rule_score / 100.0)
-            + (1.0 - config.rule_weight) * probability
-        )
-        model_used = True
+        model_consulted = True
+        if config.low_gate <= rule_score <= config.high_gate:
+            risk_score = 100.0 * (
+                config.rule_weight * (rule_score / 100.0)
+                + (1.0 - config.rule_weight) * probability
+            )
+            model_used = True
 
     return Decision(
         risk_score=risk_score,
         rule_score=rule_score,
         model_probability=probability,
+        model_consulted=model_consulted,
         model_used=model_used,
         verdict=_verdict(risk_score),
         evidence=ranked[: config.max_evidence],
@@ -203,6 +219,8 @@ def _aggregate_rule_score(
     contextual: list[_ContextEvidence],
     strategy: RuleAggregation,
 ) -> float:
+    if strategy == "semantic-top8-v1":
+        return _aggregate_semantic_top8(contextual)
     if strategy == "legacy-top8":
         return _aggregate_legacy_with_summary_cover(contextual)
     if strategy == "context-max-v1":
@@ -225,6 +243,63 @@ def _aggregate_rule_score(
     if strategy == "context-causal-v6":
         return _aggregate_context_causal_v6(contextual)
     raise ValueError(f"unsupported rule aggregation: {strategy}")
+
+
+def _aggregate_semantic_top8(
+    contextual: list[_ContextEvidence],
+) -> float:
+    """Score semantic novelty rather than repeated source occurrences."""
+    covered = {
+        event_key
+        for item in contextual
+        if item.evidence.evidence_kind == "summary"
+        for event_key in item.covered_event_keys
+    }
+    retained: dict[tuple[str, ...], float] = {}
+    for item in contextual:
+        if item.event_key is not None and item.event_key in covered:
+            continue
+        retained[item.dedup_key] = max(
+            retained.get(item.dedup_key, 0.0),
+            item.evidence.score,
+        )
+    return min(100.0, sum(nlargest(8, retained.values())))
+
+
+def _rank_evidence(contextual: list[_ContextEvidence]) -> list[Evidence]:
+    """Collapse equivalent evidence while retaining its occurrence count."""
+    groups: dict[tuple[str, ...], list[_ContextEvidence]] = {}
+    for item in contextual:
+        groups.setdefault(item.dedup_key, []).append(item)
+
+    ranked: list[Evidence] = []
+    for items in groups.values():
+        representative = min(
+            items,
+            key=lambda item: (
+                -item.evidence.score,
+                item.evidence.path,
+                item.evidence.line,
+                item.evidence.op,
+            ),
+        ).evidence
+        ranked.append(
+            Evidence(
+                score=representative.score,
+                reason=representative.reason,
+                path=representative.path,
+                line=representative.line,
+                op=representative.op,
+                motif=representative.motif,
+                evidence_kind=representative.evidence_kind,
+                confidence=representative.confidence,
+                occurrences=sum(item.evidence.occurrences for item in items),
+            )
+        )
+    return sorted(
+        ranked,
+        key=lambda item: (-item.score, item.path, item.line, item.op),
+    )
 
 
 def _aggregate_legacy_with_summary_cover(
@@ -407,6 +482,51 @@ def _causal_contributions(
         ):
             output.append((group.score, "event", key[1]))
     return output
+
+
+def _model_tokens(files: list[FileAnalysis]) -> list[str]:
+    """Build a bounded semantic sequence that repeated syntax cannot flood."""
+    tokens: list[str] = []
+    seen: set[tuple[str, ...]] = set()
+    for item in files:
+        file_tokens: list[str] = []
+        for event in item.events:
+            key = (
+                "event",
+                event.phase,
+                event.category,
+                event.op,
+                _model_target_class(event),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            file_tokens.append(event.token())
+        for path in item.behavior_paths:
+            key = ("motif", path.motif)
+            if key in seen:
+                continue
+            seen.add(key)
+            file_tokens.append(f"MOTIF:{path.motif}")
+        if file_tokens:
+            tokens.append(f"FILE:{item.path}")
+            tokens.extend(file_tokens)
+    return tokens
+
+
+def _model_target_class(event: Event) -> str:
+    normalized = event.target.lower().replace("\\", "/").replace(" ", "_")
+    if event.op in {"NETWORK_SEND", "NETWORK_RECEIVE"}:
+        return "network"
+    if event.op in {"SENSITIVE_FILE_READ", "PERSISTENCE_WRITE"}:
+        return "sensitive"
+    if any(marker in normalized for marker in MODEL_SENSITIVE_TARGET_MARKERS):
+        return "sensitive"
+    if event.op in {"FILE_READ", "FILE_WRITE", "FILE_DELETE"}:
+        return "file"
+    if "/" in normalized or normalized.startswith("."):
+        return "path"
+    return "generic"
 
 
 def _is_auxiliary_path(path: str) -> bool:

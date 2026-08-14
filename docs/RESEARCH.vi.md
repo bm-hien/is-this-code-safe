@@ -6,8 +6,8 @@ Hướng này khả thi trên Codespace 2 CPU, nhưng đột phá hợp lý khô
 nhỏ một LLM tổng quát rồi bắt nó đọc toàn bộ source. Hướng có cơ hội tốt hơn là:
 
 > Biên dịch source thành ngôn ngữ hành vi bảo mật MalIR, giữ bằng chứng theo
-> dòng code, xử lý ca rõ ràng bằng rule/mô hình sparse, và chỉ gọi mô hình µMal
-> dưới một triệu tham số cho ca không chắc chắn.
+> dòng code, bão hòa tín hiệu lặp theo ngữ nghĩa, và chỉ cho xác suất của µMal
+> dưới một triệu tham số tác động quyết định trong vùng không chắc chắn.
 
 Prototype hiện tại chứng minh được chi phí kỹ thuật. Nó chưa chứng minh được độ
 chính xác ngoài thực tế và chưa thể thay thế VirusTotal.
@@ -48,7 +48,7 @@ với signature, sandbox hoặc analyst; không nên tự nhận là antivirus h
 1. IR hành vi có kiểu và có vị trí bằng chứng;
 2. frontend nhiều ngôn ngữ cùng biên dịch về một IR;
 3. extraction bị chặn tài nguyên và không chạy code;
-4. selective/conditional inference theo vùng bất định;
+4. semantic saturation và conditional decision fusion theo vùng bất định;
 5. đánh giá low-FPR, temporal drift và chi phí CPU cùng lúc.
 
 ### Phát hiện mới làm thay đổi thiết kế thí nghiệm
@@ -119,9 +119,12 @@ likelihood. Pass local flow theo assignment, biểu thức/container, transform,
 comprehension, loop và branch join bảo thủ. Nó bị chặn ở 16 trace mỗi value,
 16 event thật mỗi trace, 256 path, depth lời gọi 3 và 64 lần mở rộng mỗi
 file; event gate bỏ qua toàn bộ pass khi không có cặp source/sink phù hợp.
-Legacy scorer mặc định bỏ các điểm event source/sink đã được summary bao phủ,
-nên path mới không tự cộng trùng với chính nó. Có thể giữ local flow nhưng tắt
-summary bằng `--no-call-summaries`.
+Scorer mặc định `semantic-top8-v1` chỉ cộng một lần cho mỗi operation và
+mỗi cặp motif/loại bằng chứng tương đương, nhưng vẫn giữ `occurrences` và toàn
+bộ event thô để audit. Vì vậy lặp cùng URL hoặc sink không thể đẩy điểm lên theo
+số dòng. Summary vẫn bỏ điểm source/sink đã bao phủ để không tự cộng trùng.
+`legacy-top8` chỉ còn dùng khi cần tái hiện baseline cũ. Có thể giữ local flow
+nhưng tắt summary bằng `--no-call-summaries`.
 
 Motif gồm credential/file exfiltration, fingerprint transfer, file-to-network,
 download-execute, encoded execution, install-time execution, persistence và
@@ -141,12 +144,18 @@ counterexample nằm ở
 Mô hình sparse dùng signed feature hashing trên MalIR n-gram và online logistic
 regression tự viết bằng standard library. Smoke checkpoint chỉ 7.259 byte.
 
-µMal là Transformer encoder 567.746 tham số, vocabulary hash 4.096, sequence
-256, hai layer, width 96, bốn attention head. Nó học classification cùng
-masked-behavior-token prediction từ đầu, không tải foundation model.
+µMal là Transformer encoder 567.746 tham số, vocabulary hash 4.096, context
+256 token mỗi cửa sổ, hai layer, width 96, bốn attention head. Nó học
+classification cùng masked-behavior-token prediction từ đầu, không tải
+foundation model. Input được compact theo phase/category/operation/target-class;
+chuỗi dài dùng tối đa 16 cửa sổ chồng 32 token và lấy xác suất lớn nhất, không
+cộng xác suất theo kích thước source.
 
-Rule score nằm ngoài 20–80 thì không gọi model. Đây là conditional compute:
-chi phí trung bình bằng extraction cộng tỷ lệ ca bất định nhân chi phí µMal.
+Khi model đã được cung cấp hoặc tải về, hệ thống luôn hiển thị xác suất để audit.
+Xác suất chỉ thay đổi risk score trong gate 20–80; bên ngoài gate nó là advisory
+và rule score được giữ nguyên. Đây là conditional decision fusion, không còn là
+conditional compute. Việc này giảm trạng thái “gated off” nhưng vẫn ngăn model
+yếu làm đảo quyết định rule rõ ràng.
 
 ### Lớp audit và evaluation mới
 
@@ -193,7 +202,7 @@ Máy: 2 vCPU, khoảng 8 GB RAM, Python 3.12.1, Linux x86-64.
 | Sparse checkpoint | 7.259 byte |
 | µMal FP32 checkpoint | 2.280.321 byte |
 | µMal inference, 2 thread | median 6,49 ms; p95 12,50 ms |
-| Test | 165 Python + 14 browser test pass |
+| Test | 169 Python + 16 browser test pass |
 | Môi trường train PyTorch | 992 MB; không cần cho core/sparse |
 
 Các hàng dataflow đầu tiên được đo ngày 2026-08-12. Ba hàng direct-call được

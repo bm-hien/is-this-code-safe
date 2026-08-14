@@ -42,6 +42,11 @@ must not trust:
   excluded.
 - Event targets contain syntax-derived identifiers or literals, never contents
   read from paths mentioned by the inspected program.
+- Equivalent operations and motifs contribute rule weight once; repeated syntax
+  increments an auditable occurrence count instead of amplifying risk.
+- Model input is compacted by semantic class and evaluated in at most 16
+  overlapping windows, preventing repeated URLs from evicting later behaviors
+  while retaining a hard inference bound.
 - The research archive reader supports only wheel/ZIP/TAR.GZ, reads `.py` member
   bytes in memory, and never materializes an archive tree on disk.
 - It rejects traversal/control-character paths, case-folded duplicate paths,
@@ -103,6 +108,10 @@ Static syntax analysis can miss:
   mutation, dynamic dispatch, or packages;
 - environment-triggered branches and logic bombs;
 - adversarial dead code designed to create false positives;
+- semantic-padding variants that introduce many distinct operation classes
+  rather than exact repeats;
+- coarse target-class collisions that cause the model representative token to
+  omit useful target detail;
 - equivalent APIs absent from the policy vocabulary.
 
 It can also flag legitimate installers, deployment tools, debuggers, backup

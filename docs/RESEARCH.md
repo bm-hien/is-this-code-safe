@@ -230,9 +230,14 @@ tokens. Training combines classification with masked-token prediction. No
 pretrained weights, natural-language tokenizer, retrieval system, or hosted API
 is used.
 
+The detector compacts repeated semantic event classes before model input and
+uses bounded overlapping contexts instead of silently truncating after one
+window. A supplied model is always observable, but its probability changes the
+decision only inside the uncertainty gate.
+
 The fair test is not “µMal versus a huge LLM.” It is whether µMal improves
 low-FPR recall over rules, sparse MalIR, and an equal-parameter raw-source model
-enough to justify its conditional CPU cost.
+enough to justify its bounded CPU cost.
 
 ### 4.3 Evidence instead of post-hoc SHAP
 
@@ -251,8 +256,8 @@ explanation of µMal's probability.
   lexical hashed features at the same CPU/memory budget?
 - RQ2: Does µMal improve recall at 0.1% and 1% false-positive rates over the
   sparse stage, especially on uncertain packages?
-- RQ3: How much extraction and model latency does conditional compute save
-  versus always-on inference?
+- RQ3: What latency does always-observable, windowed inference add versus a
+  conditional-compute baseline, and is the advisory probability useful?
 - RQ4: Which IR fields—phase, target, category, order, and motifs—drive
   generalization rather than dataset leakage?
 - RQ5: Does bounded local provenance reduce false alerts versus proximity-only
@@ -447,11 +452,12 @@ round-trip; it says nothing about generalization.
 
 ### Test state
 
-One hundred seventy-nine automated tests currently pass: 165 Python tests and
-14 browser tests. They cover extraction ordering, alias resolution, non-execution,
+One hundred eighty-five automated tests currently pass: 169 Python tests and
+16 browser tests. They cover extraction ordering, alias resolution, non-execution,
 syntax errors and warning isolation, deterministic tokens, symlinks and size
 limits, bounded hostile archives, source-set/normalized-AST grouping, local and
-direct-call provenance counterexamples and gating, sparse
+direct-call provenance counterexamples and gating, semantic repeat saturation,
+model-input compaction, multi-window µMal coverage, sparse
 learning/serialization, µMal training/loading, manifest leakage, low-FPR power,
 paired group statistics, CLI JSON, browser evidence fidelity, Monaco wiring and
 fallback, and benchmark output.

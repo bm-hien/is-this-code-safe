@@ -440,11 +440,12 @@ def _print_report(report) -> None:
         f"{assessment} | {report.verdict} | risk {report.risk_score:.1f}/100 | "
         f"{report.files_scanned} Python files | {report.elapsed_ms:.1f} ms"
     )
-    model_state = (
-        f"{report.model_probability:.3f}"
-        if report.model_probability is not None
-        else "not needed"
-    )
+    if report.model_probability is None:
+        model_state = "unavailable"
+    elif report.model_used:
+        model_state = f"{report.model_probability:.3f} (contributed)"
+    else:
+        model_state = f"{report.model_probability:.3f} (advisory only)"
     print(f"rule score {report.rule_score:.1f} | model {model_state}")
     for item in report.evidence:
         motif = f" [{item.motif}]" if item.motif else ""
@@ -453,8 +454,9 @@ def _print_report(report) -> None:
             if item.evidence_kind and item.confidence is not None
             else ""
         )
+        occurrences = f" x{item.occurrences}" if item.occurrences > 1 else ""
         print(
-            f"- {item.path}:{item.line} {item.op}{motif}{provenance} "
+            f"- {item.path}:{item.line} {item.op}{occurrences}{motif}{provenance} "
             f"+{item.score:.0f}: {item.reason}"
         )
     for warning in report.warnings:

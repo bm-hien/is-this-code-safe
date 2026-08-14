@@ -87,6 +87,7 @@ class Evidence:
     motif: str | None = None
     evidence_kind: str | None = None
     confidence: str | None = None
+    occurrences: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -99,6 +100,7 @@ class ScanReport:
     risk_score: float
     rule_score: float
     model_probability: float | None
+    model_consulted: bool
     model_used: bool
     files_scanned: int
     files_skipped: int
@@ -125,6 +127,7 @@ class ScanReport:
                 if self.model_probability is None
                 else round(self.model_probability, 6)
             ),
+            "model_consulted": self.model_consulted,
             "model_used": self.model_used,
             "files_scanned": self.files_scanned,
             "files_skipped": self.files_skipped,

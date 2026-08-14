@@ -75,11 +75,12 @@ latter “high” would overstate what was proved.
 
 The numeric motif policy is unchanged in this first implementation. Detector
 aggregation treats a summary as causal evidence and suppresses a weaker
-proximity duplicate. The default legacy aggregator also removes the source and
-sink event scores covered by a summary, preventing the new path from stacking
-with itself while leaving older evidence behavior unchanged. The report retains
-the medium qualitative tier. A future score change requires locked validation
-rather than an intuitive weight.
+proximity duplicate. Both the default semantic aggregator and the retained
+legacy baseline remove source and sink event scores covered by a summary,
+preventing the new path from stacking with itself. The semantic default also
+saturates repeated equivalent operations and motifs while reporting their
+occurrence count. The report retains the medium qualitative tier. A future
+weight change requires locked validation rather than an intuitive value.
 
 ## Deliberate limits
 
