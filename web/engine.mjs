@@ -224,7 +224,6 @@ const PERSISTENCE_MARKERS = Object.freeze([
   "launchagents",
   "launchdaemons",
   "sitecustomize.py",
-  "pth",
 ]);
 
 const SOURCE_OPS = new Set([
@@ -252,6 +251,16 @@ function containsMarker(value, markers) {
     .toLowerCase()
     .replaceAll("\\", "/");
   return markers.some((marker) => normalized.includes(marker));
+}
+
+function isPersistencePath(value) {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .replaceAll("\\", "/");
+  if (PERSISTENCE_MARKERS.some((marker) => normalized.includes(marker))) {
+    return true;
+  }
+  return (normalized.split("/").at(-1) || "").endsWith(".pth");
 }
 
 function resolveName(name, aliases) {
@@ -375,9 +384,10 @@ function indentation(line) {
 
 function phaseFor(fileName, functions) {
   const current = functions.at(-1)?.name || "<module>";
+  const baseName = fileName.split(/[\\/]/).at(-1)?.toLowerCase() || fileName;
   if (
-    (fileName.toLowerCase() === "setup.py" && functions.length === 0) ||
-    INSTALL_NAMES.has(current.toLowerCase())
+    (baseName === "setup.py" && functions.length === 0) ||
+    INSTALL_NAMES.has(current)
   ) {
     return "install";
   }
@@ -518,6 +528,12 @@ function extractEvents(source, fileName) {
       if (!classified) continue;
 
       if (
+        classified.op === "FILE_WRITE" &&
+        ["write", "write_text", "write_bytes"].includes(name.split(".").at(-1))
+      ) {
+        target = name;
+      }
+      if (
         classified.op === "FILE_READ" &&
         containsMarker(target, SENSITIVE_MARKERS)
       ) {
@@ -529,7 +545,7 @@ function extractEvents(source, fileName) {
       }
       if (
         classified.op === "FILE_WRITE" &&
-        containsMarker(target, PERSISTENCE_MARKERS)
+        isPersistencePath(target)
       ) {
         classified = {
           op: "PERSISTENCE_WRITE",

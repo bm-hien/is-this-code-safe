@@ -291,13 +291,26 @@ Nếu chưa đạt các cổng này, mô tả đúng là “prototype nghiên c�
 
 ## Việc nên làm tiếp theo
 
-1. Thay cộng điểm toàn package bằng top-k theo file/function và chuẩn hóa size.
-2. Tách file-to-network nhạy cảm khỏi network client hợp lệ; thêm negative context.
-3. Thêm bounded function summaries nhưng không dựng whole-program call graph.
-4. Tạo hard-negative corpus có ít nhất 368 nhóm benign cho gate FPR 1%, rồi mở
-   rộng lên hàng nghìn nhóm cho target 0,1%.
-5. Chỉ calibrate score mới trên validation; đo AURC và reject-rate drift thật.
-6. So với sparse MalIR trước; chỉ sau đó mới thử INT8 và frontend JavaScript.
+`context-causal-v6` cùng staged-file provenance hiện đã vượt gate development
+với threshold `>38` và 15/53 nhóm malicious OMCBench validation được phát hiện.
+Trên 451 artifact PyPI development, extension này không làm thay đổi score của
+artifact nào; PyPI holdout vẫn chưa được mở. Báo cáo chi tiết nằm ở
+[CONTEXT_CAUSAL_V6_DEVELOPMENT_2026-08-13.md](CONTEXT_CAUSAL_V6_DEVELOPMENT_2026-08-13.md).
+
+1. Đóng băng V6 thành một commit sạch và study lock bất biến; chỉ sau đó mới
+   chạy PyPI holdout đúng một lần. Không chỉnh threshold sau khi thấy holdout.
+2. Nếu holdout thất bại, công bố negative result và dùng corpus xác nhận mới cho
+   V7; không tái dùng holdout đã lộ để tune.
+3. Đánh giá `inline remote shell execution` ở event-level (ví dụ direct
+   `Invoke-WebRequest` + `Invoke-Expression`) trước khi thêm motif; không flag
+   text nằm trong test/assert/Dockerfile template.
+4. Mở rộng name resolution theo lexical scope để xử lý parameter/nested callable
+   shadowing, không chỉ module-level shadowing như fix `compile` hiện tại.
+5. Nghiên cứu activation/import reachability có giới hạn để phân biệt code thư
+   viện dormant với hành vi chạy khi import/install mà không dựng full call graph.
+6. So V6 với sparse MalIR trên split mới và đo AURC/calibration/CPU sau khi gate
+   reference-benign được xác nhận.
+7. Chỉ sau các gate trên mới mở rộng frontend JavaScript hoặc tối ưu model/INT8.
 
 Bản kế hoạch tiếng Anh đầy đủ, nguồn tham khảo và claim gates nằm trong
 [RESEARCH.md](RESEARCH.md). Contract manifest/prediction nằm trong

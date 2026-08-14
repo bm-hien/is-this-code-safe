@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from heapq import nlargest
 from typing import Literal, Protocol
 
@@ -13,7 +13,36 @@ class ProbabilityModel(Protocol):
     def predict_proba(self, tokens: list[str]) -> float: ...
 
 
-RuleAggregation = Literal["legacy-top8", "context-max-v1"]
+RuleAggregation = Literal[
+    "legacy-top8",
+    "context-max-v1",
+    "context-cover-v2",
+    "context-causal-v6",
+]
+
+
+V6_CONTEXT_ONLY_OPS = {
+    "ENV_READ",
+    "SYSTEM_DISCOVERY",
+    "DYNAMIC_IMPORT",
+    "DECODE",
+    "ENCODE",
+    "FILE_WRITE",
+    "UNSAFE_DESERIALIZE",
+}
+
+
+AUXILIARY_PATH_SEGMENTS = {
+    "test",
+    "tests",
+    "testing",
+    "doc",
+    "docs",
+    "example",
+    "examples",
+    "benchmark",
+    "benchmarks",
+}
 
 
 EVENT_WEIGHTS = {
@@ -58,6 +87,21 @@ class _ContextEvidence:
     evidence: Evidence
     context: tuple[str, str]
     dedup_key: tuple[str, ...]
+    event_key: tuple[str, int] | None = None
+    covered_event_keys: frozenset[tuple[str, int]] = frozenset()
+
+
+@dataclass(slots=True)
+class _EventGroup:
+    score: float = 0.0
+    event_keys: set[tuple[str, int]] = field(default_factory=set)
+
+
+@dataclass(slots=True)
+class _PathGroup:
+    score: float = 0.0
+    covered: set[tuple[str, int]] = field(default_factory=set)
+    high_confidence: bool = False
 
 
 def decide(
@@ -82,7 +126,7 @@ def decide(
                     dedup_key=("event", "ANALYSIS_LIMIT"),
                 )
             )
-        for event in item.events:
+        for event_index, event in enumerate(item.events):
             weight = EVENT_WEIGHTS.get(event.op, 0.0)
             if weight:
                 contextual.append(
@@ -96,6 +140,7 @@ def decide(
                         ),
                         context=(event.path, event.function),
                         dedup_key=("event", event.op),
+                        event_key=(item.path, event_index),
                     )
                 )
         for path in item.behavior_paths:
@@ -114,6 +159,9 @@ def decide(
                     ),
                     context=(first.path, first.function),
                     dedup_key=("motif", path.motif, path.evidence_kind),
+                    covered_event_keys=frozenset(
+                        (item.path, event_index) for event_index in path.event_indexes
+                    ),
                 )
             )
 
@@ -159,23 +207,210 @@ def _aggregate_rule_score(
 ) -> float:
     if strategy == "legacy-top8":
         return min(100.0, sum(item.score for item in ranked[:8]))
-    if strategy != "context-max-v1":
-        raise ValueError(f"unsupported rule aggregation: {strategy}")
-
-    contexts: dict[tuple[str, str], dict[tuple[str, ...], float]] = {}
-    for item in contextual:
-        retained = contexts.setdefault(item.context, {})
-        retained[item.dedup_key] = max(
-            retained.get(item.dedup_key, 0.0),
-            item.evidence.score,
+    if strategy == "context-max-v1":
+        contexts: dict[tuple[str, str], dict[tuple[str, ...], float]] = {}
+        for item in contextual:
+            retained = contexts.setdefault(item.context, {})
+            retained[item.dedup_key] = max(
+                retained.get(item.dedup_key, 0.0),
+                item.evidence.score,
+            )
+        return min(
+            100.0,
+            max(
+                (sum(nlargest(4, retained.values())) for retained in contexts.values()),
+                default=0.0,
+            ),
         )
-    return min(
-        100.0,
-        max(
-            (sum(nlargest(4, retained.values())) for retained in contexts.values()),
-            default=0.0,
-        ),
+    if strategy == "context-cover-v2":
+        return _aggregate_context_cover(contextual)
+    if strategy == "context-causal-v6":
+        return _aggregate_context_causal_v6(contextual)
+    raise ValueError(f"unsupported rule aggregation: {strategy}")
+
+
+def _aggregate_context_cover(contextual: list[_ContextEvidence]) -> float:
+    contexts: dict[tuple[str, str], list[_ContextEvidence]] = {}
+    for item in contextual:
+        contexts.setdefault(item.context, []).append(item)
+
+    maximum = 0.0
+    for items in contexts.values():
+        event_scores = {
+            item.event_key: item.evidence.score
+            for item in items
+            if item.event_key is not None
+        }
+        event_groups: dict[tuple[str, ...], _EventGroup] = {}
+        path_groups: dict[tuple[str, ...], _PathGroup] = {}
+        for item in items:
+            if item.dedup_key[0] == "event":
+                group = event_groups.setdefault(item.dedup_key, _EventGroup())
+                group.score = max(group.score, item.evidence.score)
+                if item.event_key is not None:
+                    group.event_keys.add(item.event_key)
+                continue
+            group = path_groups.setdefault(item.dedup_key, _PathGroup())
+            group.score = max(group.score, item.evidence.score)
+            if item.evidence.evidence_kind in {"dataflow", "structural"}:
+                group.high_confidence = True
+                group.covered.update(item.covered_event_keys)
+
+        covered: set[tuple[str, int]] = set()
+        retained: list[float] = []
+        for group in path_groups.values():
+            score = group.score
+            if group.high_confidence:
+                covered.update(group.covered)
+                covered_scores = [
+                    event_scores[event_key]
+                    for event_key in group.covered
+                    if event_key in event_scores
+                ]
+                if covered_scores:
+                    score = max(score, max(covered_scores))
+            retained.append(score)
+
+        for group in event_groups.values():
+            if not group.event_keys or any(
+                event_key not in covered for event_key in group.event_keys
+            ):
+                retained.append(group.score)
+        maximum = max(maximum, sum(nlargest(4, retained)))
+    return min(100.0, maximum)
+
+
+def _aggregate_context_causal_v6(contextual: list[_ContextEvidence]) -> float:
+    contexts: dict[tuple[str, str], list[_ContextEvidence]] = {}
+    for item in contextual:
+        contexts.setdefault(item.context, []).append(item)
+
+    maximum = 0.0
+    for (path, _function), items in contexts.items():
+        contributions = _causal_contributions(items)
+        if _is_auxiliary_path(path):
+            context_score = max((score for score, *_ in contributions), default=0.0)
+        elif _is_orchestration_path(path):
+            causal = [
+                score
+                for score, kind, name in contributions
+                if kind == "dataflow"
+                or (
+                    kind == "structural"
+                    and name
+                    in {
+                        "install_time_execution",
+                        "persistence_write",
+                    }
+                )
+            ]
+            has_dataflow = any(kind == "dataflow" for _, kind, _ in contributions)
+            if has_dataflow:
+                context_score = sum(nlargest(2, causal))
+            else:
+                context_score = max(
+                    (score for score, *_ in contributions),
+                    default=0.0,
+                )
+        else:
+            contextual_scores = [
+                score
+                for score, kind, name in contributions
+                if kind == "event" and name in V6_CONTEXT_ONLY_OPS
+            ]
+            retained = [
+                score
+                for score, kind, name in contributions
+                if not (kind == "event" and name in V6_CONTEXT_ONLY_OPS)
+            ]
+            if contextual_scores:
+                retained.append(max(contextual_scores))
+            context_score = sum(nlargest(4, retained))
+        maximum = max(maximum, context_score)
+    return min(100.0, maximum)
+
+
+def _causal_contributions(
+    items: list[_ContextEvidence],
+) -> list[tuple[float, str, str]]:
+    event_scores = {
+        item.event_key: item.evidence.score
+        for item in items
+        if item.event_key is not None
+    }
+    event_groups: dict[tuple[str, ...], _EventGroup] = {}
+    path_groups: dict[tuple[str, ...], _PathGroup] = {}
+    for item in items:
+        if item.dedup_key[0] == "event":
+            group = event_groups.setdefault(item.dedup_key, _EventGroup())
+            group.score = max(group.score, item.evidence.score)
+            if item.event_key is not None:
+                group.event_keys.add(item.event_key)
+            continue
+        group = path_groups.setdefault(item.dedup_key, _PathGroup())
+        group.score = max(group.score, item.evidence.score)
+        group.covered.update(item.covered_event_keys)
+        if item.evidence.evidence_kind in {"dataflow", "structural"}:
+            group.high_confidence = True
+
+    exact_motifs = {
+        key[1] for key in path_groups if len(key) > 2 and key[2] == "dataflow"
+    }
+    covered: set[tuple[str, int]] = set()
+    output: list[tuple[float, str, str]] = []
+    for key, group in path_groups.items():
+        motif = key[1]
+        evidence_kind = key[2] if len(key) > 2 else ""
+        if evidence_kind == "proximity" and motif in exact_motifs:
+            covered.update(group.covered)
+            continue
+        covered_scores = [
+            event_scores[event_key]
+            for event_key in group.covered
+            if event_key in event_scores
+        ]
+        strongest_event = max(covered_scores, default=0.0)
+        covered.update(group.covered)
+        if evidence_kind == "proximity":
+            score = strongest_event + group.score
+            output.append((score, "proximity", motif))
+            continue
+        if evidence_kind == "structural" and motif == "destructive_file_action":
+            score = strongest_event or group.score
+        else:
+            score = max(group.score, strongest_event)
+        output.append((score, evidence_kind or "path", motif))
+
+    for key, group in event_groups.items():
+        if not group.event_keys or any(
+            event_key not in covered for event_key in group.event_keys
+        ):
+            output.append((group.score, "event", key[1]))
+    return output
+
+
+def _is_auxiliary_path(path: str) -> bool:
+    normalized = path.lower().replace("\\", "/")
+    parts = normalized.split("/")
+    filename = parts[-1] if parts else normalized
+    if any(part in AUXILIARY_PATH_SEGMENTS for part in parts[:-1]):
+        return True
+    return (
+        filename == "conftest.py"
+        or filename.startswith("test_")
+        or filename.endswith("_test.py")
     )
+
+
+def _is_orchestration_path(path: str) -> bool:
+    if _is_auxiliary_path(path):
+        return True
+    normalized = path.lower().replace("\\", "/")
+    parts = normalized.split("/")
+    filename = parts[-1] if parts else normalized
+    if any(part in {"scripts", "script", "action", "actions"} for part in parts[:-1]):
+        return True
+    return filename in {"setup.py", "configure.py"}
 
 
 def _verdict(score: float) -> str:

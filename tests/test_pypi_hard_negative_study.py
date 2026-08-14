@@ -174,3 +174,33 @@ def test_selected_split_requires_450_disjoint_groups_each():
     rows[-1]["normalized_ast_hash"] = rows[0]["normalized_ast_hash"]
     with pytest.raises(ValueError, match="split leakage"):
         _validate_split_manifest(rows)
+
+
+def test_study_cli_can_freeze_a_new_candidate_without_changing_v2_defaults():
+    parser = study.build_parser()
+    args = parser.parse_args(
+        [
+            "development",
+            "/acquisition",
+            "/preparation",
+            "/omc",
+            "/audit.jsonl",
+            "/output",
+            "--repository-commit",
+            "0" * 40,
+            "--container-image",
+            "python@sha256:example",
+            "--study-id",
+            "itcs-context-causal-v6-2026-08-13",
+            "--candidate-rule-aggregation",
+            "context-causal-v6",
+        ]
+    )
+    original = (study.STUDY_ID, study.BASELINE, study.CANDIDATE)
+    try:
+        study._configure_study(args)
+        assert study.STUDY_ID == "itcs-context-causal-v6-2026-08-13"
+        assert study.BASELINE.rule_aggregation == "legacy-top8"
+        assert study.CANDIDATE.rule_aggregation == "context-causal-v6"
+    finally:
+        study.STUDY_ID, study.BASELINE, study.CANDIDATE = original

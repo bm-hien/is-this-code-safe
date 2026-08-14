@@ -275,3 +275,122 @@ requests.post("https://example.invalid", data=payload)
     item = next(evidence for evidence in decision.evidence if evidence.motif)
     assert item.evidence_kind == "dataflow"
     assert item.confidence == "high"
+
+
+def test_download_written_to_named_file_then_executed_is_exact_dataflow():
+    result = analyze(
+        """
+import requests
+import subprocess
+
+def run(url, filename):
+    response = requests.get(url)
+    with open(filename, "wb") as handle:
+        handle.write(response.content)
+    subprocess.run(["python", filename])
+"""
+    )
+    flow = paths(result, "download_execute")
+    exact = [item for item in flow if item.evidence_kind == "dataflow"]
+    assert len(exact) == 1
+    assert event_operations(result, exact[0]) == [
+        "NETWORK_RECEIVE",
+        "FILE_WRITE",
+        "PROCESS_EXEC",
+    ]
+
+
+def test_staged_file_provenance_is_killed_by_path_reassignment():
+    result = analyze(
+        """
+import requests
+import subprocess
+
+def run(url, filename):
+    response = requests.get(url)
+    with open(filename, "wb") as handle:
+        handle.write(response.content)
+    filename = "known-safe.py"
+    subprocess.run(["python", filename])
+"""
+    )
+    assert not any(
+        item.evidence_kind == "dataflow" for item in paths(result, "download_execute")
+    )
+
+
+def test_staged_download_does_not_taint_a_different_execution_path():
+    result = analyze(
+        """
+import requests
+import subprocess
+
+def run(url, downloaded, local_script):
+    response = requests.get(url)
+    with open(downloaded, "wb") as handle:
+        handle.write(response.content)
+    subprocess.run(["python", local_script])
+"""
+    )
+    assert not any(
+        item.evidence_kind == "dataflow" for item in paths(result, "download_execute")
+    )
+
+
+def test_staged_file_chmod_is_not_mistaken_for_payload_execution():
+    result = analyze(
+        """
+import os
+import requests
+
+def prepare(url, filename):
+    response = requests.get(url)
+    with open(filename, "wb") as handle:
+        handle.write(response.content)
+    os.system(f"chmod +x {filename}")
+"""
+    )
+    assert not any(
+        item.evidence_kind == "dataflow" for item in paths(result, "download_execute")
+    )
+
+
+def test_staged_file_in_shell_command_position_is_exact_execution():
+    result = analyze(
+        """
+import os
+import requests
+
+def run(url, filename):
+    response = requests.get(url)
+    with open(filename, "wb") as handle:
+        handle.write(response.content)
+    os.system(f"./{filename} &")
+"""
+    )
+    exact = [
+        item
+        for item in paths(result, "download_execute")
+        if item.evidence_kind == "dataflow"
+    ]
+    assert len(exact) == 1
+
+
+def test_staged_file_windows_start_launcher_is_exact_execution():
+    result = analyze(
+        """
+import os
+import requests
+
+def run(url, filename):
+    response = requests.get(url)
+    open(filename, "wb").write(response.content)
+    os.system("start " + filename)
+"""
+    )
+    exact = [
+        item
+        for item in paths(result, "download_execute")
+        if item.evidence_kind == "dataflow"
+    ]
+    assert len(exact) == 1

@@ -76,3 +76,64 @@ def test_untrusted_syntax_warning_is_not_written_to_process_logs():
         result = PythonExtractor().analyze_source(source, "untrusted.py")
     assert result.parse_error is None
     assert caught == []
+
+
+def test_unittest_setup_method_is_runtime_not_install_phase():
+    source = "class Case:\n    def setUp(self):\n        exec('value = 1')\n"
+    result = PythonExtractor().analyze_source(source, "test_example.py")
+    dynamic = next(event for event in result.events if event.op == "DYNAMIC_EXEC")
+    assert dynamic.phase == "runtime"
+    assert "install_time_execution" not in [
+        path.motif for path in result.behavior_paths
+    ]
+
+
+def test_file_write_content_is_not_treated_as_destination_path():
+    source = (
+        "def render(handle):\n    handle.write('.. toctree::\\n   :maxdepth: 1\\n')\n"
+    )
+    result = PythonExtractor().analyze_source(source)
+    writes = [event for event in result.events if event.op == "FILE_WRITE"]
+    assert len(writes) == 1
+    assert writes[0].target.endswith(".write")
+    assert "PERSISTENCE_WRITE" not in [event.op for event in result.events]
+
+
+def test_path_write_text_uses_receiver_as_destination():
+    source = (
+        "from pathlib import Path\n"
+        "Path('/tmp/sitecustomize.pth').write_text('import hook')\n"
+    )
+    result = PythonExtractor().analyze_source(source)
+    event = next(event for event in result.events if event.op == "PERSISTENCE_WRITE")
+    assert event.target == "/tmp/sitecustomize.pth"
+
+
+def test_pth_marker_requires_pth_filename_not_substring():
+    source = (
+        "from pathlib import Path\n"
+        "Path('/tmp/maxdepth.txt').write_text('documentation')\n"
+    )
+    result = PythonExtractor().analyze_source(source)
+    assert "PERSISTENCE_WRITE" not in [event.op for event in result.events]
+
+
+def test_module_defined_compile_helper_is_not_treated_as_builtin_execution():
+    source = (
+        "def run(value):\n"
+        "    return compile(value)\n\n"
+        "def compile(value):\n"
+        "    return value\n"
+    )
+    result = PythonExtractor().analyze_source(source)
+    assert "DYNAMIC_EXEC" not in [event.op for event in result.events]
+
+
+def test_explicit_builtins_compile_remains_dynamic_execution():
+    source = (
+        "import builtins\n"
+        "def run(value):\n"
+        "    return builtins.compile(value, '<value>', 'exec')\n"
+    )
+    result = PythonExtractor().analyze_source(source)
+    assert "DYNAMIC_EXEC" in [event.op for event in result.events]

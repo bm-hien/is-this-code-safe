@@ -42,6 +42,12 @@ EXPECTED_GROUPS_PER_SPLIT = 450
 MAX_EVENTS = 2_000
 BASELINE = CascadeConfig(rule_aggregation="legacy-top8")
 CANDIDATE = CascadeConfig(rule_aggregation="context-max-v1")
+RULE_AGGREGATIONS = (
+    "legacy-top8",
+    "context-max-v1",
+    "context-cover-v2",
+    "context-causal-v6",
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -67,10 +73,22 @@ def _worker_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--repository-commit", required=True)
     parser.add_argument("--container-image", required=True)
     parser.add_argument("--progress-every", type=int, default=25)
+    parser.add_argument("--study-id", default=STUDY_ID)
+    parser.add_argument(
+        "--baseline-rule-aggregation",
+        choices=RULE_AGGREGATIONS,
+        default=BASELINE.rule_aggregation,
+    )
+    parser.add_argument(
+        "--candidate-rule-aggregation",
+        choices=RULE_AGGREGATIONS,
+        default=CANDIDATE.rule_aggregation,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    _configure_study(args)
     if not re.fullmatch(r"[0-9a-f]{40}", args.repository_commit):
         raise ValueError("repository-commit must be a full lowercase SHA")
     if args.progress_every < 1:
@@ -81,6 +99,16 @@ def main(argv: list[str] | None = None) -> int:
         summary = run_holdout(args)
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
+
+
+def _configure_study(args: argparse.Namespace) -> None:
+    global STUDY_ID, BASELINE, CANDIDATE
+    study_id = str(args.study_id)
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", study_id):
+        raise ValueError("study-id must be a compact filesystem-safe identifier")
+    STUDY_ID = study_id
+    BASELINE = CascadeConfig(rule_aggregation=args.baseline_rule_aggregation)
+    CANDIDATE = CascadeConfig(rule_aggregation=args.candidate_rule_aggregation)
 
 
 def run_development(args: argparse.Namespace) -> dict[str, Any]:

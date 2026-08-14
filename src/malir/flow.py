@@ -30,6 +30,27 @@ VALUE_TRANSFORMS = {
     "DYNAMIC_IMPORT",
 }
 EXECUTION_SINKS = {"DYNAMIC_EXEC", "PROCESS_EXEC"}
+_FILE_STAGE_PREFIX = "\0malir-file-stage:"
+_PROCESS_LAUNCHERS = {
+    "bash",
+    "cmd",
+    "node",
+    "powershell",
+    "powershell.exe",
+    "pwsh",
+    "pypy",
+    "pypy3",
+    "python",
+    "python.exe",
+    "python3",
+    "pythonw",
+    "pythonw.exe",
+    "sh",
+    "start",
+    "wscript",
+    "wscript.exe",
+    "zsh",
+}
 
 
 def build_local_dataflow_paths(
@@ -74,6 +95,7 @@ class _LocalFlowAnalyzer:
         self.env: dict[str, Traces] = {}
         self.paths: list[BehaviorPath] = []
         self.path_keys: set[tuple[str, tuple[int, ...]]] = set()
+        self.file_handles: dict[str, str] = {}
 
     def analyze(self, tree: ast.AST) -> list[BehaviorPath]:
         if isinstance(tree, ast.Module):
@@ -150,11 +172,17 @@ class _LocalFlowAnalyzer:
             self.env = self._merge_env(joined, otherwise)
             return
         if isinstance(node, (ast.With, ast.AsyncWith)):
+            previous_handles = dict(self.file_handles)
             for item in node.items:
                 traces = self._expr(item.context_expr)
                 if item.optional_vars is not None:
                     self._assign(item.optional_vars, traces)
+                    if isinstance(item.optional_vars, ast.Name):
+                        path_name = self._open_path_name(item.context_expr)
+                        if path_name is not None:
+                            self.file_handles[item.optional_vars.id] = path_name
             self._block(node.body)
+            self.file_handles = previous_handles
             return
         if isinstance(node, (ast.Try, ast.TryStar)):
             self._try(node)
@@ -193,7 +221,9 @@ class _LocalFlowAnalyzer:
             self._expr(node.returns)
 
         outer = self.env
+        outer_handles = self.file_handles
         self.env = {}
+        self.file_handles = {}
         for argument in (
             *node.args.posonlyargs,
             *node.args.args,
@@ -206,6 +236,7 @@ class _LocalFlowAnalyzer:
             self.env[node.args.kwarg.arg] = ()
         self._block(node.body)
         self.env = outer
+        self.file_handles = outer_handles
 
     def _class(self, node: ast.ClassDef) -> None:
         for decorator in node.decorator_list:
@@ -215,9 +246,12 @@ class _LocalFlowAnalyzer:
         for keyword in node.keywords:
             self._expr(keyword.value)
         outer = self.env
+        outer_handles = self.file_handles
         self.env = {}
+        self.file_handles = {}
         self._block(node.body)
         self.env = outer
+        self.file_handles = outer_handles
 
     def _try(self, node: ast.Try | ast.TryStar) -> None:
         base = self._copy_env(self.env)
@@ -338,6 +372,9 @@ class _LocalFlowAnalyzer:
             return ((event_index,),)
         if operation in VALUE_TRANSFORMS:
             return self._append_event(all_inputs, event_index, origin_if_empty=True)
+        if operation == "FILE_WRITE":
+            self._record_file_stage(node, event_index, arguments, keywords)
+            return all_inputs
         if operation in EXECUTION_SINKS or operation == "NETWORK_SEND":
             payload = self._sink_payload(
                 node,
@@ -385,7 +422,159 @@ class _LocalFlowAnalyzer:
                 for keyword, traces in keywords
                 if keyword is None or keyword in command_names
             )
+            if operation == "PROCESS_EXEC":
+                selected.append(self._staged_file_traces(node, command_names))
         return self._merge(*selected)
+
+    def _record_file_stage(
+        self,
+        node: ast.Call,
+        event_index: int,
+        arguments: list[Traces],
+        keywords: list[tuple[str | None, Traces]],
+    ) -> None:
+        name = self.call_names.get(id(node), "")
+        if name in {"open", "builtins.open", "io.open"}:
+            return
+        destination = self._file_destination_name(node)
+        if destination is None:
+            return
+        payload = self._merge(
+            *arguments,
+            *(
+                traces
+                for keyword, traces in keywords
+                if keyword not in {"path", "filename"}
+            ),
+        )
+        staged = self._append_event(payload, event_index, origin_if_empty=False)
+        remote = tuple(
+            trace
+            for trace in staged
+            if any(self.events[index].op == "NETWORK_RECEIVE" for index in trace)
+        )
+        if not remote:
+            return
+        key = self._file_stage_key(destination)
+        self.env[key] = self._merge(self.env.get(key, ()), remote)
+
+    def _staged_file_traces(self, node: ast.Call, command_names: set[str]) -> Traces:
+        expressions: list[ast.AST] = list(node.args[:1])
+        expressions.extend(
+            keyword.value
+            for keyword in node.keywords
+            if keyword.arg is None or keyword.arg in command_names
+        )
+        names = set().union(
+            *(self._execution_path_names(expression) for expression in expressions)
+        )
+        return self._merge(
+            *(self.env.get(self._file_stage_key(name), ()) for name in names)
+        )
+
+    def _execution_path_names(self, node: ast.AST) -> set[str]:
+        staged = self._staged_names(node)
+        if not staged:
+            return set()
+        if isinstance(node, ast.Name):
+            return staged
+        if isinstance(node, (ast.List, ast.Tuple)) and node.elts:
+            direct = self._staged_names(node.elts[0])
+            if direct:
+                return direct
+            if self._is_process_launcher(node.elts[0]):
+                return set().union(
+                    *(self._staged_names(item) for item in node.elts[1:])
+                )
+            return set()
+        if isinstance(node, (ast.JoinedStr, ast.BinOp)):
+            prefix = self._static_command_prefix(node).lstrip()
+            if not prefix or prefix.startswith(("./", ".\\")):
+                return staged
+            head = prefix.split(maxsplit=1)[0].strip("\"'").lower()
+            if head.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] in _PROCESS_LAUNCHERS:
+                return staged
+        return set()
+
+    def _staged_names(self, node: ast.AST) -> set[str]:
+        return {
+            child.id
+            for child in ast.walk(node)
+            if isinstance(child, ast.Name)
+            and self.env.get(self._file_stage_key(child.id))
+        }
+
+    @staticmethod
+    def _is_process_launcher(node: ast.AST) -> bool:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            name = node.value.strip().lower().rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+            return name in _PROCESS_LAUNCHERS
+        return (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "sys"
+            and node.attr == "executable"
+        )
+
+    @classmethod
+    def _static_command_prefix(cls, node: ast.AST) -> str:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.Name):
+            return ""
+        if isinstance(node, ast.JoinedStr):
+            output = []
+            for item in node.values:
+                if isinstance(item, ast.Constant) and isinstance(item.value, str):
+                    output.append(item.value)
+                    continue
+                break
+            return "".join(output)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left = cls._static_command_prefix(node.left)
+            if cls._statically_complete_string(node.left):
+                return left + cls._static_command_prefix(node.right)
+            return left
+        return ""
+
+    @staticmethod
+    def _statically_complete_string(node: ast.AST) -> bool:
+        return isinstance(node, ast.Constant) and isinstance(node.value, str)
+
+    def _file_destination_name(self, node: ast.Call) -> str | None:
+        if not isinstance(node.func, ast.Attribute):
+            return None
+        receiver = node.func.value
+        if isinstance(receiver, ast.Name):
+            return self.file_handles.get(receiver.id)
+        if not isinstance(receiver, ast.Call) or not receiver.args:
+            return None
+        receiver_name = self.call_names.get(id(receiver), "")
+        if receiver_name in {
+            "open",
+            "builtins.open",
+            "io.open",
+            "Path",
+            "pathlib.Path",
+        }:
+            return self._name_expression(receiver.args[0])
+        return None
+
+    def _open_path_name(self, node: ast.AST) -> str | None:
+        if not isinstance(node, ast.Call) or not node.args:
+            return None
+        name = self.call_names.get(id(node), "")
+        if name not in {"open", "builtins.open", "io.open"}:
+            return None
+        return self._name_expression(node.args[0])
+
+    @staticmethod
+    def _name_expression(node: ast.AST) -> str | None:
+        return node.id if isinstance(node, ast.Name) else None
+
+    @staticmethod
+    def _file_stage_key(name: str) -> str:
+        return f"{_FILE_STAGE_PREFIX}{name}"
 
     def _record_sink(self, sink_index: int, traces: Traces) -> None:
         sink = self.events[sink_index]
@@ -471,6 +660,7 @@ class _LocalFlowAnalyzer:
 
     def _assign(self, target: ast.AST, traces: Traces) -> None:
         if isinstance(target, ast.Name):
+            self.env.pop(self._file_stage_key(target.id), None)
             self.env[target.id] = traces
             return
         if isinstance(target, ast.Starred):

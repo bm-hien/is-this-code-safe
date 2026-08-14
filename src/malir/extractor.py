@@ -13,7 +13,13 @@ from pathlib import Path
 
 from .flow import build_local_dataflow_paths
 from .motifs import build_behavior_paths
-from .policy import classify_call, is_persistence_path, is_sensitive_path
+from .policy import (
+    READ_METHODS,
+    WRITE_METHODS,
+    classify_call,
+    is_persistence_path,
+    is_sensitive_path,
+)
 from .types import Event, FileAnalysis
 
 _DATAFLOW_SEND_SOURCES = {
@@ -67,7 +73,18 @@ class PythonExtractor:
                 # changed category between supported Python versions.
                 warnings.simplefilter("ignore")
                 tree = ast.parse(source, filename=path, type_comments=True)
-            visitor = _BehaviorVisitor(path, self.limits.max_events)
+            module_callables = {
+                node.name
+                for node in tree.body
+                if isinstance(
+                    node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+                )
+            }
+            visitor = _BehaviorVisitor(
+                path,
+                self.limits.max_events,
+                module_callables=module_callables,
+            )
             visitor.visit(tree)
         except (RecursionError, SyntaxError, ValueError) as error:
             result.parse_error = _format_parse_error(error)
@@ -95,9 +112,16 @@ class PythonExtractor:
 
 
 class _BehaviorVisitor(ast.NodeVisitor):
-    def __init__(self, path: str, max_events: int) -> None:
+    def __init__(
+        self,
+        path: str,
+        max_events: int,
+        *,
+        module_callables: set[str] | None = None,
+    ) -> None:
         self.path = path
         self.max_events = max_events
+        self.module_callables = module_callables or set()
         self.events: list[Event] = []
         self.event_limit_reached = False
         self.aliases: dict[str, str] = {}
@@ -115,7 +139,7 @@ class _BehaviorVisitor(ast.NodeVisitor):
         install_names = {"setup", "install", "post_install", "build", "develop"}
         if filename == "setup.py" and not self.function_stack:
             return "install"
-        if self.function_stack and self.function_stack[-1].lower() in install_names:
+        if self.function_stack and self.function_stack[-1] in install_names:
             return "install"
         return "import" if not self.function_stack else "runtime"
 
@@ -211,7 +235,7 @@ class _BehaviorVisitor(ast.NodeVisitor):
                     "source",
                     "remote communication",
                 )
-            target = self._call_target(node) or name
+            target = self._call_target(node, name) or name
             if op == "FILE_READ" and is_sensitive_path(target):
                 op, detail = "SENSITIVE_FILE_READ", "sensitive file access"
             if op == "FILE_WRITE" and is_persistence_path(target):
@@ -244,7 +268,10 @@ class _BehaviorVisitor(ast.NodeVisitor):
             item.arg in {"data", "json", "files", "content"} for item in node.keywords
         )
 
-    def _call_target(self, node: ast.Call) -> str | None:
+    def _call_target(self, node: ast.Call, name: str) -> str | None:
+        file_methods = (*READ_METHODS, *WRITE_METHODS)
+        if any(name.endswith(method) for method in file_methods):
+            return self._receiver_path_target(node) or name
         for keyword in node.keywords:
             if keyword.arg in {"url", "filename", "path", "data"}:
                 value = self._literal(keyword.value)
@@ -252,13 +279,24 @@ class _BehaviorVisitor(ast.NodeVisitor):
                     return value
         if node.args:
             return self._literal(node.args[0])
-        if (
-            isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Call)
-            and node.func.value.args
-        ):
-            return self._literal(node.func.value.args[0])
         return None
+
+    def _receiver_path_target(self, node: ast.Call) -> str | None:
+        if not isinstance(node.func, ast.Attribute):
+            return None
+        receiver = node.func.value
+        if not isinstance(receiver, ast.Call) or not receiver.args:
+            return None
+        factory = self._qualified_name(receiver.func)
+        if factory not in {
+            "Path",
+            "pathlib.Path",
+            "open",
+            "builtins.open",
+            "io.open",
+        }:
+            return None
+        return self._literal(receiver.args[0])
 
     def _alias_value(self, node: ast.AST | None) -> str | None:
         if isinstance(node, (ast.Name, ast.Attribute)):
@@ -276,7 +314,12 @@ class _BehaviorVisitor(ast.NodeVisitor):
 
     def _qualified_name(self, node: ast.AST | None) -> str | None:
         if isinstance(node, ast.Name):
-            return self.aliases.get(node.id, node.id)
+            resolved = self.aliases.get(node.id)
+            if resolved is not None:
+                return resolved
+            if node.id in self.module_callables:
+                return f"<module>.{node.id}"
+            return node.id
         if isinstance(node, ast.Attribute):
             parent = self._qualified_name(node.value)
             return f"{parent}.{node.attr}" if parent else node.attr

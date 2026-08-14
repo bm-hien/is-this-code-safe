@@ -83,3 +83,34 @@ test("browser input is bounded", () => {
     /1 MB/,
   );
 });
+
+
+test("unittest setUp is not treated as package installation", () => {
+  const report = analyzeSource(
+    `class Case:
+    def setUp(self):
+        exec("value = 1")
+`,
+    "tests/test_case.py",
+  );
+  const dynamic = report.events.find((event) => event.op === "DYNAMIC_EXEC");
+  assert.equal(dynamic.phase, "runtime");
+  assert.equal(
+    report.motifs.some((item) => item.motif === "install_time_execution"),
+    false,
+  );
+});
+
+
+test("write payload text is not interpreted as a persistence path", () => {
+  const report = analyzeSource(
+    `def render(handle):
+    handle.write(".. toctree::\\n   :maxdepth: 1\\n")
+`,
+    "docs.py",
+  );
+  assert.equal(
+    report.events.some((event) => event.op === "PERSISTENCE_WRITE"),
+    false,
+  );
+});

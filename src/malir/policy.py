@@ -230,7 +230,6 @@ PERSISTENCE_PATH_MARKERS = (
     "launchagents",
     "launchdaemons",
     "sitecustomize.py",
-    "pth",
 )
 
 
@@ -246,4 +245,9 @@ def is_sensitive_path(value: str | None) -> bool:
 
 
 def is_persistence_path(value: str | None) -> bool:
-    return contains_marker(value, PERSISTENCE_PATH_MARKERS)
+    if not value:
+        return False
+    normalized = value.lower().replace("\\", "/")
+    if contains_marker(normalized, PERSISTENCE_PATH_MARKERS):
+        return True
+    return normalized.rsplit("/", 1)[-1].endswith(".pth")

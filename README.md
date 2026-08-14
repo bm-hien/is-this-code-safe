@@ -201,6 +201,19 @@ this is a useful negative result, not a detection-quality claim. See the
 [full pilot report](docs/OMCBENCH_PILOT_2026-08-12.md) and
 [payload-free raw metadata](research/results/omcbench-python-2026-08-12/).
 
+### Hard-negative development update
+
+A follow-up development-only scorer, `context-causal-v6`, plus exact staged-file
+provenance now passes the existing non-vacuity gate without opening the sealed
+PyPI holdout: its maximum development-benign score remains 38 and the resulting
+threshold detects 15/53 (28.30%) OMCBench validation malicious groups. The
+staged-file extension changed 0/451 PyPI development artifact scores while
+recovering three malicious normalized-AST groups. The previous
+`context-max-v1` candidate detected 4/53 at its threshold. This is not a
+confirmatory FPR result; the one-shot PyPI holdout remains unscored until a clean
+committed snapshot and immutable study lock are frozen. See
+[the V6 development report](docs/CONTEXT_CAUSAL_V6_DEVELOPMENT_2026-08-13.md).
+
 ## Measured on the target Codespace
 
 Environment: 2 vCPU, about 8 GB RAM, Python 3.12.1, Linux x86-64. Measurements
@@ -273,6 +286,8 @@ are not calibrated probabilities and none is whole-program proof.
 - scripts/train_web_model.py: reproducible CPU trainer/exporter for µMal Nano.
 - docs/MALIR_SPEC.md: IR contract and versioning.
 - docs/OMCBENCH_PILOT_2026-08-12.md: real-package pilot method and results.
+- docs/CONTEXT_CAUSAL_V6_DEVELOPMENT_2026-08-13.md: hard-negative scorer
+  development result, negative ablations, and holdout freeze status.
 - docs/RESEARCH.md: literature gap, experiments, and claim gates.
 - docs/THREAT_MODEL.md: security boundary and known evasions.
 - tests/fixtures: inert code that is parsed only, never imported.
