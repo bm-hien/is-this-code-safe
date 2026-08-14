@@ -1,4 +1,18 @@
-import { WEB_MODEL } from "./model.mjs";
+import {
+  getFullModelStatus,
+  installFullModel,
+  loadFullModel,
+  predictMicro,
+  unloadFullModel,
+} from "./full-model-runtime.mjs";
+
+export {
+  getFullModelStatus,
+  installFullModel,
+  loadFullModel,
+  predictMicro,
+  unloadFullModel,
+};
 
 export const MAX_SOURCE_BYTES = 1_000_000;
 
@@ -242,9 +256,6 @@ const INSTALL_NAMES = new Set([
   "build",
   "develop",
 ]);
-const MODEL_TOKEN_IDS = new Map(
-  WEB_MODEL.config.vocabulary.map((token, index) => [token, index]),
-);
 
 function containsMarker(value, markers) {
   const normalized = String(value || "")
@@ -691,142 +702,18 @@ function buildMotifs(events, windowSize = 12) {
   return motifs.sort((left, right) => right.score - left.score);
 }
 
-function canonicalTokens(events, motifs) {
-  const tokens = [];
+function canonicalTokens(events, motifs, fileName) {
+  const tokens = [`FILE:${fileName}`];
   for (const event of events) {
-    if (event.phase === "install") tokens.push("PHASE:install");
-    tokens.push(`OP:${event.op}`);
+    const target = String(event.target || "unknown")
+      .toLowerCase()
+      .replaceAll(" ", "_");
+    tokens.push(
+      `P:${event.phase}|C:${event.category}|O:${event.op}|T:${target}`,
+    );
   }
   tokens.push(...motifs.map((motif) => `MOTIF:${motif.motif}`));
   return tokens;
-}
-
-function layerNorm(rows, weight, bias) {
-  return rows.map((row) => {
-    const mean = row.reduce((total, value) => total + value, 0) / row.length;
-    const variance =
-      row.reduce((total, value) => total + (value - mean) ** 2, 0) / row.length;
-    const scale = 1 / Math.sqrt(variance + 1e-5);
-    return row.map(
-      (value, index) => (value - mean) * scale * weight[index] + bias[index],
-    );
-  });
-}
-
-function linear(rows, weight, bias) {
-  return rows.map((row) =>
-    weight.map((outputRow, outputIndex) => {
-      let value = bias[outputIndex];
-      for (let index = 0; index < row.length; index += 1) {
-        value += row[index] * outputRow[index];
-      }
-      return value;
-    }),
-  );
-}
-
-function addRows(left, right) {
-  return left.map((row, rowIndex) =>
-    row.map((value, columnIndex) => value + right[rowIndex][columnIndex]),
-  );
-}
-
-function gelu(value) {
-  const coefficient = Math.sqrt(2 / Math.PI);
-  return (
-    0.5 * value * (1 + Math.tanh(coefficient * (value + 0.044715 * value ** 3)))
-  );
-}
-
-function selfAttention(rows, weights, heads) {
-  const projected = linear(rows, weights.inProjWeight, weights.inProjBias);
-  const width = rows[0].length;
-  const headWidth = width / heads;
-  const joined = rows.map(() => Array(width).fill(0));
-
-  for (let head = 0; head < heads; head += 1) {
-    const offset = head * headWidth;
-    for (let queryIndex = 0; queryIndex < rows.length; queryIndex += 1) {
-      const scores = [];
-      for (let keyIndex = 0; keyIndex < rows.length; keyIndex += 1) {
-        let score = 0;
-        for (let axis = 0; axis < headWidth; axis += 1) {
-          score +=
-            projected[queryIndex][offset + axis] *
-            projected[keyIndex][width + offset + axis];
-        }
-        scores.push(score / Math.sqrt(headWidth));
-      }
-      const maximum = Math.max(...scores);
-      const exponentials = scores.map((score) => Math.exp(score - maximum));
-      const denominator = exponentials.reduce(
-        (total, value) => total + value,
-        0,
-      );
-      for (let axis = 0; axis < headWidth; axis += 1) {
-        let value = 0;
-        for (let keyIndex = 0; keyIndex < rows.length; keyIndex += 1) {
-          const probability = exponentials[keyIndex] / denominator;
-          value += probability * projected[keyIndex][2 * width + offset + axis];
-        }
-        joined[queryIndex][offset + axis] = value;
-      }
-    }
-  }
-  return linear(joined, weights.outProjWeight, weights.outProjBias);
-}
-
-export function predictMicro(tokens) {
-  const { config, weights } = WEB_MODEL;
-  const ids = [1];
-  for (const token of tokens.slice(0, config.maxLength - 2)) {
-    ids.push(MODEL_TOKEN_IDS.get(token) ?? 4);
-  }
-  ids.push(2);
-
-  let hidden = ids.map((id, position) =>
-    weights.tokenEmbedding[id].map(
-      (value, axis) => value + weights.positionEmbedding[position][axis],
-    ),
-  );
-  const normalizedAttention = layerNorm(
-    hidden,
-    weights.norm1Weight,
-    weights.norm1Bias,
-  );
-  hidden = addRows(
-    hidden,
-    selfAttention(normalizedAttention, weights, config.heads),
-  );
-  const normalizedFeedForward = layerNorm(
-    hidden,
-    weights.norm2Weight,
-    weights.norm2Bias,
-  );
-  const expanded = linear(
-    normalizedFeedForward,
-    weights.linear1Weight,
-    weights.linear1Bias,
-  ).map((row) => row.map(gelu));
-  hidden = addRows(
-    hidden,
-    linear(expanded, weights.linear2Weight, weights.linear2Bias),
-  );
-  hidden = layerNorm(hidden, weights.finalNormWeight, weights.finalNormBias);
-
-  const pooled = Array(config.dModel).fill(0);
-  for (const row of hidden) {
-    row.forEach((value, index) => {
-      pooled[index] += value / hidden.length;
-    });
-  }
-  const logits = linear(
-    [pooled],
-    weights.classifierWeight,
-    weights.classifierBias,
-  )[0];
-  const probability = 1 / (1 + Math.exp(logits[0] - logits[1]));
-  return Math.min(1, Math.max(0, probability));
 }
 
 function verdictFor(score) {
@@ -893,8 +780,10 @@ export function analyzeSource(source, fileName = "sample.py") {
     100,
     evidence.slice(0, 8).reduce((total, item) => total + item.score, 0),
   );
-  const modelUsed = ruleScore >= 20 && ruleScore <= 80;
-  const modelTokens = canonicalTokens(events, motifs);
+  const modelStatus = getFullModelStatus();
+  const modelUsed =
+    modelStatus.loaded && ruleScore >= 20 && ruleScore <= 80;
+  const modelTokens = canonicalTokens(events, motifs, fileName);
   const modelProbability = modelUsed ? predictMicro(modelTokens) : null;
   const riskScore = modelUsed
     ? 100 * (0.65 * (ruleScore / 100) + 0.35 * modelProbability)
@@ -916,9 +805,10 @@ export function analyzeSource(source, fileName = "sample.py") {
     motifs,
     modelTokens,
     model: {
+      loaded: modelStatus.loaded,
       used: modelUsed,
       probability: modelProbability,
-      metadata: WEB_MODEL.metadata,
+      metadata: modelStatus.metadata,
     },
     warnings: [
       "Browser demo uses the MalIR-Lite lexical frontend; install the Python CLI for AST-accurate analysis.",

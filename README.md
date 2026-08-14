@@ -1,91 +1,126 @@
-# Is this code safe? - ITCS
+# ITCS — Is This Code Safe?
 
 [![CI](https://github.com/bm-hien/is-this-code-safe/actions/workflows/ci.yml/badge.svg)](https://github.com/bm-hien/is-this-code-safe/actions/workflows/ci.yml)
 [![GitHub Pages](https://github.com/bm-hien/is-this-code-safe/actions/workflows/pages.yml/badge.svg)](https://bm-hien.github.io/is-this-code-safe/)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB)](https://www.python.org/)
+[![Vision: multi-language](https://img.shields.io/badge/vision-multi--language-7c3aed)](#language-roadmap)
+[![Current frontend: Python 3.11+](https://img.shields.io/badge/current_frontend-Python_3.11%2B-3776AB)](#language-support)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-**ITCS** is a CPU-first research prototype for static malware-behavior analysis
-of Python source code. It converts source into a compact Malware Intermediate
-Representation (MalIR), preserves line-level evidence, and spends model compute
-only on uncertain cases.
+**ITCS** is a CPU-first, language-extensible research platform for finding
+malware-like behavior in source code. Language-specific frontends translate
+code into a shared, evidence-carrying Malware Intermediate Representation
+(**MalIR**). The detector then applies bounded flow analysis, behavior motifs,
+cheap rules, and selective µMal inference without executing the inspected code.
 
-**[Try the browser-local GitHub Pages demo →](https://bm-hien.github.io/is-this-code-safe/)**
+> **Current status:** the production CLI frontend supports Python. A
+> JavaScript/TypeScript frontend is the next planned language milestone, with
+> Go or Rust considered only after the two-language MalIR contract is validated.
+> Planned support is not the same as implemented support.
 
-> This is not a VirusTotal replacement yet, and it is not an antivirus verdict.
-> It is a local source-analysis layer for triage and research. Never install,
-> import, or execute an untrusted package just to scan it.
+**[Open the browser-local analyzer →](https://bm-hien.github.io/is-this-code-safe/)**
 
-## Why this architecture
+ITCS is not an antivirus verdict or a VirusTotal replacement. It is a local
+source-triage and security-research layer. Never install, import, or execute an
+untrusted package merely to scan it.
 
-Large code models are costly, raw source contains much irrelevant syntax, and a
-single opaque score is difficult to audit. ITCS instead uses this cascade:
+## One behavior model, multiple source languages
 
+Different languages express the same security-relevant intent through different
+syntax and ecosystems. ITCS keeps those concerns separate:
 ~~~mermaid
 flowchart TD
-    A["Python source"] --> B["Bounded AST parser"]
-    B --> C["MalIR events"]
-    C --> D["Candidate-gated local flow + motifs"]
-    C --> E["7 KB sparse model"]
-    D --> F["Evidence score"]
-    E --> G["Uncertainty gate"]
+    A["Language frontend"] --> B["Language-neutral MalIR"]
+    B --> C["Rules, flow, and motifs"]
+    B --> D["Sparse model"]
+    C --> E["Uncertainty gate"]
+    D --> E
+    E -->|uncertain only| F["Full µMal"]
+    E -->|clear case| G["Evidence report"]
     F --> G
-    G -->|uncertain only| H["µMal 0.57M"]
-    G -->|clear case| I["Evidence report"]
-    H --> I
 ~~~
 
-Behavior sequences alone are not a new idea. The research hypothesis here is
-the combination of an evidence-carrying IR, bounded extraction, conditional
-compute, and a tiny domain language model trained from scratch.
+A frontend owns parsing, API mapping, lifecycle semantics, and source locations.
+MalIR owns the shared behavior vocabulary. The detector and models consume MalIR
+rather than raw syntax, allowing future frontends to reuse the same evidence
+policy and model experiments.
 
+The research hypothesis is not “a tiny LLM detects malware.” It is that a
+compiler-like, evidence-preserving behavior IR plus conditional model compute
+can make source triage cheaper, more auditable, and reusable across languages.
+
+## Language support
+
+| Language / frontend | Status | Scope |
+|---|---|---|
+| Python CLI | **Available** | Bounded AST parsing, alias resolution, local value provenance, motifs, and evidence reports |
+| Python MalIR-Lite | **Available in browser** | Bounded lexical test frontend with conservative `proximity:low` evidence |
+| JavaScript / TypeScript | **Next research milestone** | Package lifecycle hooks, environment, filesystem, process, dynamic evaluation, and network mappings |
+| Go or Rust | **Later research milestone** | Considered after the Python + JavaScript/TypeScript IR contract survives cross-language evaluation |
+| Additional languages | **Future / community** | Added through bounded frontends after the adapter contract is stable |
+
+See [MalIR v1](docs/MALIR_SPEC.md) for the current language-neutral event and
+token contract, and [the research plan](docs/RESEARCH.md) for claim gates.
 ## Current capabilities
 
-- Parses Python with ast; inspected files are never imported or executed.
-- Resolves common import aliases and emits source/transform/sink events.
+### Shared analysis and model layer
+
+- Emits deterministic MalIR events in the categories `context`, `source`,
+  `transform`, and `sink`.
+- Preserves file, line, column, function, phase, operation, target, and
+  human-readable evidence.
+- Distinguishes `dataflow:high`, `proximity:low`, and `structural:high`
+  evidence. These are qualitative tiers, not probabilities.
+- Builds bounded behavior motifs such as source-to-network, download-to-execute,
+  encoded execution, install-time execution, and persistence writes.
+- Uses a cheap rule score and invokes a model only inside the configurable
+  20–80 uncertainty gate.
+- Includes a dependency-free hashed online logistic classifier.
+- Includes full µMal: a 567,746-parameter behavior Transformer trained from
+  scratch with classification and masked-token objectives.
+- Produces deterministic JSON reports with source evidence and explicit limits.
+
+### Current Python frontend
+
+- Parses source with Python `ast`; inspected files are never imported or run.
+- Resolves common import and assignment aliases.
 - Tracks bounded, flow-sensitive local provenance through assignments,
   containers, transforms, comprehensions, and conservative branch joins.
-- Distinguishes `dataflow:high`, `proximity:low`, and `structural:high`
-  evidence; the labels are qualitative analysis tiers, not probabilities.
-- Uses a cheap per-callable candidate gate, so the second AST pass runs only
-  when the extracted events can form a supported source-to-sink path.
-- Produces deterministic JSON with file hashes, line evidence, and warnings.
-- Includes a dependency-free hashed online logistic classifier.
-- Includes µMal: a 567,746-parameter Transformer with joint classification and
-  masked-behavior-token objectives. It downloads no foundation-model weights.
-- Ships a GitHub Pages demo with MalIR-Lite and µMal Nano, a 3,538-parameter
-  behavior Transformer that runs entirely inside the browser.
-- Skips symlinks and common dependency/build folders; bounds files, bytes, and
-  emitted events.
-- Provides a research-only, non-extracting wheel/ZIP/TAR.GZ reader with path,
-  member, byte, compression-ratio, duplicate-path, and symlink limits.
-- Audits metadata-only dataset manifests for artifact, group, family,
-  campaign, time, and post-MalIR representation leakage.
-- Evaluates locked predictions with validation-only thresholds, low-FPR power
-  bounds, group bootstrap, calibration, and tie-aware risk-coverage/AURC.
-- Compares aligned baselines with independently locked thresholds, paired
-  group bootstrap, transition counts, and a conservative claim gate.
-- Provides training, lint, tests, and reproducible CPU benchmarks.
+- Runs the second AST pass only when events can form a supported behavior path.
+- Bounds files, bytes, events, recursion, directories, and traversal.
+- Skips symlinks and common dependency or build folders.
+- Provides an isolated, non-extracting wheel/ZIP/TAR.GZ research reader with
+  member, byte, ratio, duplicate-path, traversal, and symlink limits.
+
+### Research and evaluation tooling
+
+- Audits dataset manifests for artifact, group, family, campaign, temporal, and
+  post-MalIR representation leakage.
+- Locks thresholds on validation and applies them unchanged to test data.
+- Reports low-FPR power bounds, calibration, confidence ranking, risk coverage,
+  AURC, and group bootstrap intervals.
+- Compares aligned systems with independent thresholds, paired group bootstrap,
+  transition counts, and a conservative claim gate.
+- Includes reproducible CPU, memory, corpus, and checkpoint benchmarks.
 
 ## Quick start
 
-Core scanning needs only Python 3.11 or newer:
+The current scanner requires Python 3.11 or newer:
 
 ~~~bash
-cd /workspaces/codespaces-blank
+git clone https://github.com/bm-hien/is-this-code-safe.git
+cd is-this-code-safe
 make bootstrap
+
 .venv/bin/itcs tests/fixtures/suspicious/static_exfil.py
 .venv/bin/itcs tests/fixtures/benign --json
 ~~~
 
-A path as the first argument is shorthand for `itcs scan PATH`. Results begin
-with `MALWARE-LIKE`, `NEEDS REVIEW`, or `NO MALWARE EVIDENCE` and retain the
-supporting operations and line numbers. The last label means only that this
-analyzer found little evidence; it is not proof of safety.
+A path as the first argument is shorthand for `itcs scan PATH`. Reports use
+the verdicts `MALWARE-LIKE`, `NEEDS REVIEW`, or `NO MALWARE EVIDENCE` and
+retain the operations and line numbers that produced the score. The last label
+means only that this analyzer found little evidence; it does not prove safety.
 
-The current Codespace is already bootstrapped. Use make bootstrap-locked to
-reproduce its Linux x86-64 / CPython 3.12 dependency snapshot. For a fresh
-CPU-only setup with µMal:
+For the optional full µMal environment:
 
 ~~~bash
 make bootstrap-micro
@@ -95,8 +130,7 @@ make bootstrap-micro
   --micro-model artifacts/micro.pt --threads 2
 ~~~
 
-Train the much smaller online model:
-
+For the much smaller dependency-free online model:
 ~~~bash
 .venv/bin/itcs train-sparse examples/synthetic_train.jsonl \
   -o artifacts/sparse.model.json --epochs 40
@@ -104,34 +138,37 @@ Train the much smaller online model:
   --model artifacts/sparse.model.json
 ~~~
 
-The model is invoked only when the rule score is between 20 and 80 by default.
-Clear low-signal and high-risk cases avoid that cost.
+The bundled 32-row dataset is deliberately synthetic and exists only for
+correctness and training-plumbing tests. Its training accuracy is not evidence
+of real-world detection quality.
 
-## Browser demo
+## Browser analyzer
 
-The [GitHub Pages demo](https://bm-hien.github.io/is-this-code-safe/) accepts
-pasted source or a local `.py` file. It performs all analysis in the tab and
-has a Content Security Policy that disables network connections. It never
-uploads, imports, or executes the inspected source.
+The [GitHub Pages analyzer](https://bm-hien.github.io/is-this-code-safe/)
+is a focused test interface for pasted source or a local `.py` file.
 
-GitHub Pages cannot run the Python AST backend, so the demo uses a documented
-lexical subset named MalIR-Lite. Browser paths are explicitly labeled
-`proximity:low` and receive weak motif weight; only the CLI can emit
-`dataflow:high`. Uncertain cases are scored by µMal Nano: a
-one-layer, two-head, 3,538-parameter behavior Transformer embedded as a 73 KB
-ES module. Its bundled weights were trained from scratch on 32 synthetic smoke
-rows. That makes the model architecture real and reproducible, but its output
-is not a real-world efficacy claim. Use the Python CLI for AST-accurate results.
+- Opening the page does **not** load model weights.
+- The user explicitly selects **Download full model**.
+- The 2,270,984-byte float32 binary is fetched from the same origin.
+- Web Crypto verifies its SHA-256 digest before installation.
+- Source stays in the tab and is never uploaded, imported, or executed.
+- The full 567,746-parameter µMal checkpoint runs locally in JavaScript.
+- Browser smoke vectors match the PyTorch checkpoint during tests.
+
+The browser currently uses Python MalIR-Lite because GitHub Pages cannot run the
+Python AST backend. MalIR-Lite masks strings and comments, resolves common
+aliases, emits language-neutral operations, and gives same-function proximity
+motifs only weak `proximity:low` weight. Use the CLI for AST-accurate Python
+results.
+
 See [the browser architecture and security boundary](docs/WEB_DEMO.md).
 
-Rebuild the embedded demo model with the optional CPU training environment:
-
 ~~~bash
-.venv/bin/python scripts/train_web_model.py --epochs 500 --threads 2
-node --test web/tests/*.test.mjs
+make web-model
+make test-web
+make web
 ~~~
-
-## CLI
+## CLI reference
 
 ~~~text
 itcs PATH [--json] [--no-dataflow] [--model FILE | --micro-model FILE]
@@ -145,11 +182,11 @@ itcs evaluate-predictions PREDICTIONS [--target-fpr RATE] [--json]
 itcs compare-predictions BASELINE CANDIDATE [--target-fpr RATE] [--json]
 ~~~
 
-Use --fail-on review, suspicious, or high-risk to make scan return exit code 2
-at a selected CI threshold. The default never changes the exit code based on a
-heuristic result.
+Use `--fail-on review`, `suspicious`, or `high-risk` to return exit code 2
+at a selected CI threshold. The default never changes the exit code based only
+on a heuristic verdict.
 
-JSONL training rows accept one of these forms:
+JSONL training rows accept extracted tokens, inline source, or a relative path:
 
 ~~~json
 {"label": 1, "tokens": ["P:runtime|C:source|O:ENV_READ|T:token"]}
@@ -157,13 +194,64 @@ JSONL training rows accept one of these forms:
 {"label": 0, "path": "relative/sample.py"}
 ~~~
 
-The bundled 32-row dataset is deliberately synthetic and exists only for smoke
-training. Do not report its training accuracy as real-world efficacy.
+Source rows and paths are currently parsed by the Python frontend. Future
+language adapters must add an explicit language identity rather than guessing
+from untrusted content.
 
-## Leakage-aware research evaluation
+## Frontend contract
+
+MalIR v1 is the stable integration boundary today. The internal frontend API is
+not yet presented as a public plugin SDK. A new language frontend must:
+1. parse source as data and never import, execute, build, or install it;
+2. enforce explicit bounds on bytes, syntax depth, events, traversal, and time;
+3. map ecosystem APIs into existing language-neutral operations where possible;
+4. preserve source locations and short evidence explanations;
+5. map equivalent lifecycle concepts to `import`, `install`, or `runtime`;
+6. emit deterministic event ordering and normalized targets;
+7. label evidence strength honestly and avoid claiming proximity as value flow;
+8. include suspicious-shaped positive fixtures and benign counterexamples; and
+9. update [MalIR v1](docs/MALIR_SPEC.md) when a new operation or schema field is
+   truly required.
+
+This contract is intentionally stricter than “add a parser.” Cross-language
+reuse is accepted only if false-positive behavior, explanations, compute cost,
+and model transfer are measured.
+
+## Language roadmap
+
+### Phase 1 — harden the shared core and Python reference frontend
+
+- Improve package-level aggregation using observed hard negatives.
+- Add bounded function summaries without whole-program graph construction.
+- Build a provenance-rich, statistically powered evaluation corpus.
+- Freeze validation decisions before opening sealed holdouts.
+- Continue repeated CPU, RSS, and latency profiling.
+
+### Phase 2 — JavaScript / TypeScript frontend
+
+- Map package install hooks and module-load behavior.
+- Map environment reads, filesystem access, process execution, dynamic
+  evaluation, decoding, deserialization, and network operations.
+- Reuse the MalIR vocabulary before proposing language-specific operations.
+- Compare zero-shot µMal transfer, few-shot adaptation, and joint fine-tuning.
+- Evaluate Python and JavaScript/TypeScript with project-, family-, and
+  time-disjoint groups.
+
+### Phase 3 — additional compiled-language frontend
+
+- Consider Go or Rust only after the two-language contract remains useful.
+- Validate lifecycle, build-script, dependency, process, filesystem, and network
+  semantics without forcing one ecosystem into another's assumptions.
+- Stabilize a public adapter SDK only after multiple frontends expose the right
+  abstraction boundary.
+
+Roadmap items describe research order, not release promises.
+
+## Leakage-aware evaluation
 
 The audit path reads metadata only; it never follows a sample path or opens an
-archive. The bundled research manifest and predictions are synthetic examples:
+archive. The bundled research manifest and prediction files are synthetic
+mechanics fixtures:
 
 ~~~bash
 .venv/bin/itcs audit-manifest examples/research_manifest.jsonl \
@@ -176,43 +264,39 @@ archive. The bundled research manifest and predictions are synthetic examples:
   --target-fpr 0.001 --bootstrap 2000 --seed 0 --json
 ~~~
 
-Both prediction files are synthetic mechanics fixtures. The paired command
-requires identical sample IDs and label/split/group/period metadata, rejects
-group leakage across splits, selects each system's threshold independently on
-validation, and resamples the same test groups for both systems. Its joint
-95% FPR gate uses Bonferroni-adjusted 97.5% per-system bounds.
+The evaluator selects a threshold on validation and applies it unchanged to
+test. The paired comparison requires aligned sample and group metadata,
+independent validation thresholds, and shared test-group resampling. Even with
+zero observed false positives, a one-sided 95% upper bound below 0.1% requires
+at least 2,995 independent benign groups.
 
-The evaluator chooses a threshold on validation and applies it unchanged to
-test. It reports calibration and confidence-ranking metrics separately. Even
-with zero false positives, a one-sided 95% upper bound below 0.1% requires at
-least 2,995 independent benign groups; the command labels smaller tests
-underpowered.
-See [the research data contract](docs/RESEARCH_DATA_FORMAT.md).
+See [the evaluation protocol](docs/EVALUATION_PROTOCOL.md) and
+[research data contract](docs/RESEARCH_DATA_FORMAT.md).
 
-### Real-package pilot result
+## Current research results
 
-A safely isolated, metadata-published pilot now compares proximity-only rules
-with candidate-gated local flow on all 400 Python packages in pinned OMCBench.
-Normalized-AST grouping reduced the split to 338 provisional analysis groups.
-Local flow improved test average precision from 0.5837 to 0.5954, but the
-locked 1% FPR operating point detected 0/100 malicious test packages for both
-systems. The primary claim is unsupported and statistically underpowered;
-this is a useful negative result, not a detection-quality claim. See the
-[full pilot report](docs/OMCBENCH_PILOT_2026-08-12.md) and
-[payload-free raw metadata](research/results/omcbench-python-2026-08-12/).
+### Real-package pilot
+The isolated OMCBench pilot covers 400 Python packages and 10,208 `.py`
+files. Normalized-AST grouping produced 338 provisional analysis groups.
+Candidate-gated local flow improved test average precision from 0.5837 to
+0.5954, but both systems detected 0/100 malicious test packages at the locked
+1% FPR operating point. The primary claim is unsupported and underpowered.
+This is a useful negative result, not a detection-quality claim.
+
+See the [full pilot report](docs/OMCBENCH_PILOT_2026-08-12.md) and
+[payload-free metadata](research/results/omcbench-python-2026-08-12/).
 
 ### Hard-negative development update
 
-A follow-up development-only scorer, `context-causal-v6`, plus exact staged-file
-provenance now passes the existing non-vacuity gate without opening the sealed
-PyPI holdout: its maximum development-benign score remains 38 and the resulting
-threshold detects 15/53 (28.30%) OMCBench validation malicious groups. The
-staged-file extension changed 0/451 PyPI development artifact scores while
-recovering three malicious normalized-AST groups. The previous
-`context-max-v1` candidate detected 4/53 at its threshold. This is not a
-confirmatory FPR result; the one-shot PyPI holdout remains unscored until a clean
-committed snapshot and immutable study lock are frozen. See
-[the V6 development report](docs/CONTEXT_CAUSAL_V6_DEVELOPMENT_2026-08-13.md).
+The development-only `context-causal-v6` scorer plus staged-file provenance
+passes the existing non-vacuity gate without opening the sealed PyPI holdout.
+Its maximum development-benign score is 38, and the resulting threshold detects
+15/53 OMCBench validation malicious groups. The staged-file extension changed
+0/451 PyPI development artifact scores while recovering three malicious
+normalized-AST groups.
+
+This is development evidence only. It is not a confirmatory low-FPR result.
+See the [V6 development report](docs/CONTEXT_CAUSAL_V6_DEVELOPMENT_2026-08-13.md).
 
 ## Measured on the target Codespace
 
@@ -227,86 +311,102 @@ were taken on 2026-08-12.
 | Local-flow overhead on the 95/5 synthetic mix | median +2.97%; p95 +4.70% |
 | Python allocations with local flow | 2,782,985 bytes peak; +0.82% |
 | Sparse smoke checkpoint | 7,259 bytes; 258 active weights |
-| Optional PyTorch training environment | 992 MB on disk; not needed by core/sparse |
-| Default µMal | 567,746 parameters; 2,280,321-byte FP32 checkpoint |
-| Browser µMal Nano | 3,538 parameters; 72,620-byte ES module |
+| Optional PyTorch environment | 992 MB on disk; not needed by core/sparse |
+| Default full µMal | 567,746 parameters; 2,280,321-byte FP32 checkpoint |
+| Browser full µMal | 567,746 parameters; 2,270,984-byte on-demand binary |
 | µMal single-example inference, 2 threads | median 6.49 ms; p95 12.50 ms |
-| OMCBench pilot, 400 archives / 10,208 `.py` files | 158.78 s end-to-end in isolated 2-CPU worker |
+| OMCBench pilot, 400 archives / 10,208 Python files | 158.78 s end to end |
 
-The corpus benchmark uses repeated inert templates (95% ordinary and 5%
-suspicious-shaped source). These numbers measure cost, not detection quality.
-Export aligned predictions on a project-disjoint, time-split real dataset,
-audit the manifest, evaluate each system, and use `itcs compare-predictions`
-before making comparative efficacy claims.
+These measurements describe cost, not detection quality. Language comparisons
+must use aligned, leakage-audited datasets and independently locked thresholds.
 
 ~~~bash
 .venv/bin/python scripts/benchmark_corpus.py --files 1000 \
   --repeats 21 --compare-dataflow
 .venv/bin/python scripts/benchmark_micro.py artifacts/micro.pt --repeats 300
-# Checkpoint plumbing smoke test only; never use this line for efficacy claims.
-.venv/bin/python scripts/evaluate.py examples/synthetic_train.jsonl \
-  --micro-model artifacts/micro.pt
 ~~~
 
 ## Verdict semantics
 
-- low-signal: little evidence was found; this does not prove the code is safe.
-- review: weak or ambiguous behavior deserves inspection.
-- suspicious: multiple risky operations or a behavior motif was found.
-- high-risk: strong or accumulated static evidence; still not a final malware
-  attribution.
+| Verdict | Meaning |
+|---|---|
+| `low-signal` | Little evidence was found; this does not prove safety |
+| `review` | Weak or ambiguous behavior deserves inspection |
+| `suspicious` | Multiple risky operations or a behavior motif was found |
+| `high-risk` | Strong or accumulated static evidence; not final attribution |
 
-Each result retains the operations and source locations that created the score.
-`dataflow:high` means the bounded intraprocedural pass carried a value from a
-supported source to the displayed sink. `proximity:low` is only a same-function
-window fallback; `structural:high` needs no value flow. These categorical tiers
-are not calibrated probabilities and none is whole-program proof.
-
+Every result retains the operations and source locations that produced its
+score. `dataflow:high` means bounded provenance reached the displayed sink.
+`proximity:low` is a same-scope fallback. `structural:high` requires no value
+flow. None is whole-program proof or a calibrated malware probability.
 ## Repository map
 
-- docs/RESEARCH.vi.md: bản nghiên cứu và roadmap tiếng Việt.
-- docs/EVALUATION_PROTOCOL.md: locked leakage/metrics/CPU study protocol.
-- docs/RESEARCH_DATA_FORMAT.md: manifest and prediction JSONL contracts.
-- docs/WEB_DEMO.md: browser architecture, model details, and security boundary.
-- CONTRIBUTING.md: safe contribution and research-claim rules.
-- src/malir/extractor.py: safe AST extraction, alias resolution, and the
-  per-callable data-flow candidate gate.
-- src/malir/flow.py: bounded, name-independent local value provenance.
-- src/malir/motifs.py: data-flow, proximity, and structural path policy.
-- src/malir/detector.py: evidence weights and uncertainty gate.
-- src/malir/model.py: dependency-free online sparse classifier.
-- src/malir/microlm.py: tiny Transformer and training loop.
-- src/malir/manifest.py: metadata audit and representation leakage checks.
-- src/malir/evaluation.py: low-FPR, calibration, AURC, and group bootstrap.
-- src/malir/comparison.py: aligned effects, paired group bootstrap, and claim gate.
-- src/malir/archive.py: bounded, non-extracting research archive reader.
-- src/malir/dedup.py: exact source-set and normalized-AST grouping hashes.
-- scripts/omcbench_pilot.py: pinned, metadata-only paired research runner.
-- web/: dependency-free GitHub Pages analyzer and embedded µMal Nano weights.
-- scripts/train_web_model.py: reproducible CPU trainer/exporter for µMal Nano.
-- docs/MALIR_SPEC.md: IR contract and versioning.
-- docs/OMCBENCH_PILOT_2026-08-12.md: real-package pilot method and results.
-- docs/CONTEXT_CAUSAL_V6_DEVELOPMENT_2026-08-13.md: hard-negative scorer
-  development result, negative ablations, and holdout freeze status.
-- docs/RESEARCH.md: literature gap, experiments, and claim gates.
-- docs/THREAT_MODEL.md: security boundary and known evasions.
-- tests/fixtures: inert code that is parsed only, never imported.
+| Path | Purpose |
+|---|---|
+| `src/malir/extractor.py` | Current Python AST frontend and API mappings |
+| `src/malir/flow.py` | Bounded local value provenance |
+| `src/malir/motifs.py` | Data-flow, proximity, and structural motif policy |
+| `src/malir/detector.py` | Evidence weights and uncertainty gate |
+| `src/malir/model.py` | Dependency-free sparse classifier |
+| `src/malir/microlm.py` | Full µMal Transformer and training loop |
+| `src/malir/archive.py` | Bounded, non-extracting research archive reader |
+| `src/malir/manifest.py` | Dataset metadata and leakage audit |
+| `src/malir/evaluation.py` | Locked evaluation, calibration, and bootstrap |
+| `src/malir/comparison.py` | Paired system comparison and claim gate |
+| `web/` | Browser test interface and on-demand full µMal runtime |
+| `scripts/train_web_model.py` | Full checkpoint trainer and browser exporter |
+| `docs/MALIR_SPEC.md` | Language-neutral IR contract |
+| `docs/WEB_DEMO.md` | Browser architecture and security boundary |
+| `docs/EVALUATION_PROTOCOL.md` | Leakage and low-FPR evaluation protocol |
+| `docs/RESEARCH.md` | Research questions, evidence, and language roadmap |
+| `docs/RESEARCH.vi.md` | Vietnamese research overview and roadmap |
+| `docs/THREAT_MODEL.md` | Trust boundary and known evasions |
+| `CONTRIBUTING.md` | Safety, testing, and research-claim rules |
 
 ## Known limits
 
-Version 0.6 performs bounded intraprocedural value provenance, not full
-interprocedural or whole-program data-flow analysis. It does not yet summarize
-function calls, track object attributes or mutation precisely, inspect archives
-through the normal CLI, inspect nested/native payloads, deobfuscate arbitrary
-strings, or observe runtime-only behavior. Its isolated research reader scans
-bounded Python members in memory without extracting them. It supports Python
-source only. See the research plan
-before extending the frontend to JavaScript, Go, or Rust.
+Version 0.6 has one production language frontend: Python. It performs bounded
+intraprocedural provenance, not full interprocedural or whole-program flow. It
+does not precisely summarize calls, attributes, mutation, native payloads,
+arbitrary obfuscation, runtime-only behavior, or every package lifecycle.
+The normal CLI does not yet scan archives directly; the research reader handles
+bounded Python members in isolated workflows without extracting them. The
+browser uses a smaller lexical frontend and cannot provide AST-level proof.
 
-## Safe contribution rule
+A language-neutral IR reduces duplication, but it does not guarantee that one
+language's API, build lifecycle, or threat patterns transfer correctly to
+another. Every new frontend needs its own benign counterexamples, false-positive
+analysis, ecosystem-specific threat model, and cross-language evaluation.
 
-Tests may contain suspicious-shaped source, but test runners must only read and
-parse it. Never add a test that imports, installs, launches, or contacts a
-network from an untrusted sample.
+## Safety and responsible use
 
-Licensed under the MIT License.
+- Treat every verdict as triage evidence, not final malware attribution.
+- Do not run untrusted fixtures, packages, installers, or build scripts.
+- Do not commit live malware, credentials, private source, or weaponized
+  archives.
+- Use `example.invalid` and inert suspicious-shaped text in tests.
+- Handle real samples only in isolated workers with no reusable credentials or
+  outbound network.
+- Review [the threat model](docs/THREAT_MODEL.md) before research use.
+
+## Contributing
+
+Contributions are welcome for current Python analysis, hard-negative fixtures,
+bounded extraction, evaluation, performance, explanations, and future language
+frontends. Read [CONTRIBUTING.md](CONTRIBUTING.md) first.
+
+A frontend contribution must map behavior into MalIR, remain bounded, include
+both positive and benign fixtures, and never execute inspected source. New
+operations or serialized fields require a MalIR specification update.
+
+Run the relevant checks before opening a pull request:
+
+~~~bash
+make lint
+make test
+make test-web
+~~~
+
+## License
+
+Licensed under the [MIT License](LICENSE).

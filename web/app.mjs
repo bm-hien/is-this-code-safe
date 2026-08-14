@@ -1,6 +1,12 @@
-import { analyzeSource, DEMO_SOURCES, MAX_SOURCE_BYTES } from "./engine.mjs";
+import {
+  analyzeSource,
+  DEMO_SOURCES,
+  getFullModelStatus,
+  loadFullModel,
+  MAX_SOURCE_BYTES,
+} from "./engine.mjs";
 
-const elements = {
+const elements = Object.freeze({
   editor: document.querySelector("#editor-panel"),
   source: document.querySelector("#source-code"),
   fileInput: document.querySelector("#file-input"),
@@ -25,30 +31,33 @@ const elements = {
   eventCount: document.querySelector("#event-count"),
   warnings: document.querySelector("#warnings"),
   copyJson: document.querySelector("#copy-json"),
-  copyCommand: document.querySelector("#copy-command"),
-};
+  loadModel: document.querySelector("#load-model"),
+  modelStatus: document.querySelector("#model-status"),
+  modelProgress: document.querySelector("#model-progress"),
+});
 
 const assessmentText = Object.freeze({
   "no-malware-evidence": {
     title: "No malware evidence found",
-    copy: "The analyzer found little weighted behavior evidence. This does not prove the file is safe.",
+    copy: "Little weighted behavior evidence was found. This does not prove the file is safe.",
   },
   "needs-review": {
     title: "Human review recommended",
-    copy: "The source contains ambiguous behavior that deserves inspection before you trust or run it.",
+    copy: "The source contains ambiguous behavior that deserves inspection before it is trusted or run.",
   },
   "malware-like": {
     title: "Malware-like behavior found",
-    copy: "Multiple risky operations or a behavior path were found. Review the cited lines before taking action.",
+    copy: "Risky operations or behavior paths were found. Review the cited lines before taking action.",
   },
 });
 
 let currentFileName = "sample.py";
 let currentReport = null;
-
+let modelLoading = false;
 function formatBytes(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(2) + " MB";
 }
 
 function sourceBytes() {
@@ -60,19 +69,35 @@ function updateFileMetadata() {
   elements.fileSize.textContent = formatBytes(sourceBytes());
 }
 
-function setButtonFeedback(button, value, fallback) {
-  button.textContent = value;
+function updateAnalyzeState() {
+  const ready = getFullModelStatus().loaded;
+  elements.analyze.disabled =
+    modelLoading || !ready || !elements.source.value.trim();
+  if (!ready) {
+    elements.analyze.title = "Download the full model first";
+  } else if (!elements.source.value.trim()) {
+    elements.analyze.title = "Add Python source first";
+  } else {
+    elements.analyze.removeAttribute("title");
+  }
+}
+
+function setModelState(state) {
+  document.documentElement.dataset.modelState = state;
+}
+function setTemporaryLabel(button, label, fallback) {
+  button.textContent = label;
   globalThis.setTimeout(() => {
     button.textContent = fallback;
   }, 1300);
 }
 
-async function copyText(value, button, success, fallback) {
+async function copyText(value, button) {
   try {
     await navigator.clipboard.writeText(value);
-    setButtonFeedback(button, success, fallback);
+    setTemporaryLabel(button, "Copied", "Copy JSON");
   } catch {
-    setButtonFeedback(button, "Copy failed", fallback);
+    setTemporaryLabel(button, "Copy failed", "Copy JSON");
   }
 }
 
@@ -86,36 +111,38 @@ function makeEvidenceItem(item) {
 
   const line = document.createElement("span");
   line.className = "evidence-line";
-  line.textContent = `L${item.line || "?"}`;
+  line.textContent = "L" + (item.line || "?");
 
   const body = document.createElement("div");
   body.className = "evidence-body";
   const operation = document.createElement("strong");
   const provenance = item.evidenceKind
-    ? ` · ${item.evidenceKind}:${item.confidence}`
+    ? " · " + item.evidenceKind + ":" + item.confidence
     : "";
   operation.textContent = item.motif
-    ? `${item.op} · ${item.motif}${provenance}`
+    ? item.op + " · " + item.motif + provenance
     : item.op;
+
   const reason = document.createElement("p");
   reason.textContent = item.reason;
   body.append(operation, reason);
 
   const score = document.createElement("span");
   score.className = "evidence-score";
-  score.textContent = `+${item.score}`;
-
+  score.textContent = "+" + item.score;
   row.append(line, body, score);
   return row;
 }
 
 function renderEvidence(report) {
   clearChildren(elements.evidenceList);
-  elements.evidenceCount.textContent = `${report.evidence.length} ${report.evidence.length === 1 ? "signal" : "signals"}`;
-  if (!report.evidence.length) {
+  const count = report.evidence.length;
+  elements.evidenceCount.textContent =
+    count + (count === 1 ? " signal" : " signals");
+  if (!count) {
     const item = document.createElement("li");
     item.className = "empty-state";
-    item.textContent = "No weighted behavior evidence in the browser frontend.";
+    item.textContent = "No weighted behavior evidence.";
     elements.evidenceList.append(item);
     return;
   }
@@ -124,17 +151,21 @@ function renderEvidence(report) {
 
 function renderTokens(report) {
   clearChildren(elements.behaviorTokens);
-  elements.eventCount.textContent = `${report.events.length} ${report.events.length === 1 ? "event" : "events"}`;
+  const count = report.events.length;
+  elements.eventCount.textContent =
+    count + (count === 1 ? " event" : " events");
   if (!report.modelTokens.length) {
     const token = document.createElement("span");
     token.className = "empty-token";
-    token.textContent = "No MalIR operations";
+    token.textContent = "No behavior tokens";
     elements.behaviorTokens.append(token);
     return;
   }
-  for (const value of report.modelTokens.slice(0, 48)) {
+  for (const value of report.modelTokens.slice(0, 64)) {
     const token = document.createElement("span");
-    if (value.startsWith("MOTIF:")) token.className = "motif-token";
+    token.className = value.startsWith("MOTIF:")
+      ? "behavior-token motif-token"
+      : "behavior-token";
     token.textContent = value;
     elements.behaviorTokens.append(token);
   }
@@ -150,38 +181,41 @@ function renderWarnings(report) {
 }
 
 function setGauge(score) {
-  const band = Math.max(0, Math.min(10, Math.ceil(score / 10)));
-  elements.riskGauge.className = "risk-gauge";
-  if (band) elements.riskGauge.classList.add(`score-band-${band}`);
-  elements.riskGauge.setAttribute("aria-valuenow", String(Math.round(score)));
+  const normalized = Math.max(0, Math.min(100, score));
+  elements.riskGauge.style.setProperty("--risk", normalized + "%");
+  elements.riskGauge.setAttribute("aria-valuenow", String(Math.round(normalized)));
 }
 
 function renderReport(report) {
   currentReport = report;
   const content = assessmentText[report.assessment];
-  const roundedRisk = Math.round(report.riskScore);
   const model = report.model;
+  const metadata = model.metadata;
 
   elements.result.dataset.verdict = report.verdict;
   elements.assessmentTitle.textContent = content.title;
   elements.assessmentCopy.textContent = content.copy;
-  elements.riskScore.textContent = String(roundedRisk);
+  elements.riskScore.textContent = String(Math.round(report.riskScore));
+  elements.verdictBadge.className = "verdict-badge " + report.verdict;
+  elements.verdictBadge.textContent = report.verdict;
+  elements.ruleScore.textContent = report.ruleScore.toFixed(0) + " / 100";
+  elements.modelScore.textContent = model.used
+    ? (model.probability * 100).toFixed(1) + "%"
+    : "gated off";
+  elements.latency.textContent = report.elapsedMs.toFixed(1) + " ms";
   setGauge(report.riskScore);
 
-  elements.verdictBadge.className = `verdict-badge ${report.verdict}`;
-  elements.verdictBadge.textContent = report.verdict;
-  elements.ruleScore.textContent = `${report.ruleScore.toFixed(0)} / 100`;
-  elements.modelScore.textContent = model.used
-    ? `${(model.probability * 100).toFixed(1)}%`
-    : "gated off";
-  elements.latency.textContent = `${report.elapsedMs.toFixed(1)} ms`;
-
-  elements.modelTitle.textContent = model.used
-    ? "µMal Nano consulted"
-    : "µMal Nano skipped";
-  elements.modelCopy.textContent = model.used
-    ? `${model.metadata.parameters.toLocaleString()} parameters · probability contributes 35% inside the uncertainty gate`
-    : `${model.metadata.parameters.toLocaleString()} parameters · rule score outside the 20–80 uncertainty gate`;
+  if (model.used) {
+    elements.modelTitle.textContent = metadata.name + " consulted";
+    elements.modelCopy.textContent =
+      metadata.parameters.toLocaleString() +
+      " parameters · probability contributes 35% inside the uncertainty gate";
+  } else {
+    elements.modelTitle.textContent = metadata.name + " ready";
+    elements.modelCopy.textContent =
+      metadata.parameters.toLocaleString() +
+      " parameters · rule score outside the 20–80 uncertainty gate";
+  }
 
   renderEvidence(report);
   renderTokens(report);
@@ -205,22 +239,78 @@ function renderError(error) {
   elements.copyJson.disabled = true;
 }
 
-function analyze() {
+async function analyze() {
+  if (!getFullModelStatus().loaded) {
+    renderError(new Error("Download the full model before analyzing."));
+    return;
+  }
   const source = elements.source.value;
   if (!source.trim()) {
     renderError(new Error("Paste Python source or choose a .py file first."));
     return;
   }
+
   elements.analyze.disabled = true;
   elements.analyze.firstElementChild.textContent = "Analyzing…";
+  await new Promise((resolve) => requestAnimationFrame(resolve));
   try {
-    const report = analyzeSource(source, currentFileName);
-    renderReport(report);
+    renderReport(analyzeSource(source, currentFileName));
   } catch (error) {
     renderError(error);
   } finally {
-    elements.analyze.disabled = false;
     elements.analyze.firstElementChild.textContent = "Analyze locally";
+    updateAnalyzeState();
+  }
+}
+async function downloadModel() {
+  if (modelLoading || getFullModelStatus().loaded) return;
+  modelLoading = true;
+  setModelState("loading");
+  elements.loadModel.disabled = true;
+  elements.loadModel.textContent = "Downloading…";
+  elements.modelStatus.textContent = "Preparing full model";
+  elements.modelProgress.hidden = false;
+  elements.modelProgress.value = 0;
+  updateAnalyzeState();
+
+  try {
+    const module = await import("./model.mjs");
+    const manifest = module.FULL_MODEL_MANIFEST;
+    elements.modelProgress.max = manifest.binary.bytes;
+    await loadFullModel(manifest, {
+      onProgress(loaded, total) {
+        elements.modelProgress.max = total || manifest.binary.bytes;
+        elements.modelProgress.value = loaded;
+        elements.modelStatus.textContent =
+          "Downloading " + formatBytes(loaded) + " / " +
+          formatBytes(manifest.binary.bytes);
+      },
+    });
+    const status = getFullModelStatus();
+    setModelState("ready");
+    elements.modelStatus.textContent =
+      status.metadata.name + " ready · " + formatBytes(status.binaryBytes);
+    elements.modelTitle.textContent = status.metadata.name + " ready";
+    elements.modelCopy.textContent =
+      status.metadata.parameters.toLocaleString() +
+      " parameters · waiting for a test input";
+    elements.assessmentTitle.textContent = elements.source.value.trim()
+      ? "Ready to analyze"
+      : "Waiting for input";
+    elements.assessmentCopy.textContent =
+      "The full model is loaded. Add source and select Analyze locally.";
+    elements.loadModel.textContent = "Model ready";
+    elements.modelProgress.hidden = true;
+  } catch (error) {
+    setModelState("error");
+    elements.modelStatus.textContent =
+      error instanceof Error ? error.message : String(error);
+    elements.loadModel.disabled = false;
+    elements.loadModel.textContent = "Retry download";
+    elements.modelProgress.hidden = true;
+  } finally {
+    modelLoading = false;
+    updateAnalyzeState();
   }
 }
 
@@ -231,11 +321,10 @@ async function loadFile(file) {
     return;
   }
   try {
-    const source = await file.text();
+    elements.source.value = await file.text();
     currentFileName = file.name || "sample.py";
-    elements.source.value = source;
     updateFileMetadata();
-    analyze();
+    updateAnalyzeState();
   } catch {
     renderError(new Error("The selected file could not be read as text."));
   }
@@ -243,18 +332,24 @@ async function loadFile(file) {
 
 function loadSample(name) {
   if (!(name in DEMO_SOURCES)) return;
-  currentFileName = `${name}.py`;
+  currentFileName = name + ".py";
   elements.source.value = DEMO_SOURCES[name];
   updateFileMetadata();
-  analyze();
+  updateAnalyzeState();
+  elements.source.focus();
 }
 
-elements.source.addEventListener("input", updateFileMetadata);
+elements.loadModel.addEventListener("click", downloadModel);
 elements.analyze.addEventListener("click", analyze);
+elements.source.addEventListener("input", () => {
+  updateFileMetadata();
+  updateAnalyzeState();
+});
 elements.clear.addEventListener("click", () => {
   currentFileName = "sample.py";
   elements.source.value = "";
   updateFileMetadata();
+  updateAnalyzeState();
   elements.source.focus();
 });
 
@@ -285,16 +380,9 @@ elements.editor.addEventListener("drop", (event) => {
 
 elements.copyJson.addEventListener("click", () => {
   if (!currentReport) return;
-  copyText(
-    JSON.stringify(currentReport, null, 2),
-    elements.copyJson,
-    "Copied",
-    "Copy JSON",
-  );
+  copyText(JSON.stringify(currentReport, null, 2), elements.copyJson);
 });
 
-elements.copyCommand.addEventListener("click", () => {
-  copyText("itcs file.py", elements.copyCommand, "Copied", "Copy");
-});
-
-loadSample("suspicious");
+setModelState("idle");
+updateFileMetadata();
+updateAnalyzeState();

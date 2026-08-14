@@ -3,386 +3,189 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'"
+      content="default-src 'self'; connect-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <meta
       name="description"
-      content="ITCS analyzes malware-like behavior in Python source locally, with line-level evidence and a tiny browser Transformer."
+      content="Local browser interface for testing Python source with ITCS."
     />
-    <meta name="theme-color" content="#08110f" />
-    <title>Is this code safe? — ITCS</title>
+    <title>ITCS Browser Analyzer</title>
     <link rel="stylesheet" href="./styles.css" />
+    <script type="module" src="./app.mjs"></script>
   </head>
   <body>
     <a class="skip-link" href="#analyzer">Skip to analyzer</a>
+    <div class="app-shell">
+      <header class="app-bar">
+        <div class="product-mark" aria-label="ITCS Browser Analyzer">
+          <span aria-hidden="true">µ</span>
+          <div>
+            <strong>ITCS</strong>
+            <small>Browser analyzer</small>
+          </div>
+        </div>
+        <div class="model-loader">
+          <div class="model-state" role="status" aria-live="polite">
+            <span class="status-dot" aria-hidden="true"></span>
+            <div>
+              <strong id="model-status">Full model not loaded</strong>
+              <small>Loads only when requested</small>
+            </div>
+          </div>
+          <progress
+            id="model-progress"
+            value="0"
+            max="100"
+            aria-label="Model download progress"
+            hidden
+          ></progress>
+          <button id="load-model" class="primary-button" type="button">
+            Download full model
+          </button>
+        </div>
+      </header>
 
-    <header class="site-header">
-      <a class="brand" href="./" aria-label="ITCS home">
-        <span class="brand-mark" aria-hidden="true">?</span>
-        <span>
-          <strong>ITCS</strong>
-          <small>Is this code safe?</small>
-        </span>
-      </a>
-      <nav aria-label="Main navigation">
-        <a href="#method">How it works</a>
-        <a href="#research">Research</a>
-        <a href="#limits">Limits</a>
-        <a
-          class="github-link"
-          href="https://github.com/bm-hien/is-this-code-safe"
-          rel="noreferrer"
-          >GitHub <span aria-hidden="true">↗</span></a
-        >
-      </nav>
-    </header>
+      <main id="analyzer" class="workspace">
+        <section id="editor-panel" class="panel editor-panel">
+          <header class="panel-header">
+            <div>
+              <span class="panel-kicker">Input</span>
+              <h1>Python source</h1>
+            </div>
+            <div class="file-meta">
+              <span id="file-name">sample.py</span>
+              <span id="file-size">0 B</span>
+            </div>
+          </header>
 
-    <main>
-      <section class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">
-            <span></span> Python static analysis · browser-local
-          </p>
-          <h1>Paste Python.<br /><em>Get evidence.</em></h1>
-          <p class="hero-lede">
-            A CPU-first research prototype that looks for malware-like behavior
-            without uploading, importing, or executing your code.
-          </p>
-          <div class="command" role="group" aria-label="CLI example">
-            <span aria-hidden="true">$</span>
-            <code>itcs file.py</code>
-            <button
-              id="copy-command"
-              type="button"
-              aria-label="Copy CLI command"
-            >
-              Copy
+          <div class="editor-controls" aria-label="Source controls">
+            <label class="secondary-button file-button">
+              Open .py
+              <input id="file-input" type="file" accept=".py,text/x-python,text/plain" />
+            </label>
+            <span class="control-separator" aria-hidden="true"></span>
+            <button class="text-button" type="button" data-sample="benign">
+              Benign sample
+            </button>
+            <button class="text-button" type="button" data-sample="suspicious">
+              Suspicious sample
+            </button>
+            <button class="text-button" type="button" data-sample="download">
+              Download + exec
             </button>
           </div>
-          <div class="hero-stats" role="group" aria-label="Project highlights">
-            <span><strong>3,538</strong> model parameters</span>
-            <span><strong>0</strong> server uploads</span>
-            <span><strong>CPU</strong> only</span>
-          </div>
-        </div>
 
-        <aside class="hero-note">
-          <div class="signal-orbit" aria-hidden="true">
-            <span class="orbit orbit-one"></span>
-            <span class="orbit orbit-two"></span>
-            <span class="orbit-core">ITCS</span>
-          </div>
-          <p>Evidence first</p>
-          <small>MalIR events → behavior paths → conditional µMal Nano</small>
-        </aside>
-      </section>
-
-      <div class="privacy-strip" role="note">
-        <span class="privacy-icon" aria-hidden="true">◆</span>
-        <strong>Your code stays here.</strong>
-        <span
-          >Analysis runs entirely inside this browser tab. Network access is
-          blocked by page policy.</span
-        >
-      </div>
-
-      <section
-        id="analyzer"
-        class="analyzer-shell"
-        aria-labelledby="analyzer-title"
-      >
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Live demo</p>
-            <h2 id="analyzer-title">Analyze a Python file</h2>
-          </div>
-          <span class="engine-badge"><i></i> Engine ready</span>
-        </div>
-
-        <div class="workspace">
-          <section
-            id="editor-panel"
-            class="panel editor-panel"
-            aria-label="Source editor"
-          >
-            <div class="panel-header">
-              <div class="file-tab">
-                <span aria-hidden="true">PY</span>
-                <strong id="file-name">sample.py</strong>
-                <small id="file-size">0 B</small>
-              </div>
-              <div class="file-actions">
-                <label class="button secondary compact" for="file-input">
-                  Open .py
-                </label>
-                <input
-                  id="file-input"
-                  type="file"
-                  accept=".py,text/x-python,text/plain"
-                />
-                <button
-                  id="clear-code"
-                  class="icon-button"
-                  type="button"
-                  title="Clear source"
-                  aria-label="Clear source"
-                >
-                  ×
-                </button>
-              </div>
-            </div>
-
-            <label class="visually-hidden" for="source-code"
-              >Python source code</label
-            >
+          <div class="code-wrap">
+            <span class="language-label">PYTHON</span>
             <textarea
               id="source-code"
-              wrap="soft"
-              spellcheck="false"
-              autocapitalize="off"
+              aria-label="Python source code"
               autocomplete="off"
-              aria-describedby="editor-help"
+              autocapitalize="off"
+              spellcheck="false"
+              placeholder="Paste Python source here, open a file, or choose a sample."
             ></textarea>
+          </div>
 
-            <div class="editor-footer">
-              <p id="editor-help">
-                Drop a file here or paste source. Maximum 1 MB.
-              </p>
-              <div class="samples" role="group" aria-label="Load example">
-                <span>Try:</span>
-                <button type="button" data-sample="benign">Benign</button>
-                <button type="button" data-sample="suspicious">
-                  Exfiltration
-                </button>
-                <button type="button" data-sample="download">
-                  Download + exec
-                </button>
-              </div>
-            </div>
-
-            <button
-              id="analyze-button"
-              class="button primary analyze-button"
-              type="button"
-            >
+          <div class="editor-actions">
+            <button id="clear-code" class="secondary-button" type="button">
+              Clear
+            </button>
+            <button id="analyze-button" class="analyze-button" type="button" disabled>
               <span>Analyze locally</span>
               <span aria-hidden="true">→</span>
             </button>
+          </div>
+        </section>
+
+        <section id="result-panel" class="panel result-panel" aria-live="polite">
+          <header class="panel-header">
+            <div>
+              <span class="panel-kicker">Output</span>
+              <h2 id="assessment-title">Waiting for input</h2>
+            </div>
+            <button id="copy-json" class="secondary-button" type="button" disabled>
+              Copy JSON
+            </button>
+          </header>
+
+          <div class="summary-card">
+            <div
+              id="risk-gauge"
+              class="risk-gauge"
+              role="meter"
+              aria-label="Risk score"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+            >
+              <div>
+                <strong id="risk-score">—</strong>
+                <span>/ 100</span>
+              </div>
+            </div>
+            <div class="summary-copy">
+              <span id="verdict-badge" class="verdict-badge neutral">
+                Not analyzed
+              </span>
+              <p id="assessment-copy">
+                Load the full model, then submit Python source for local analysis.
+              </p>
+            </div>
+          </div>
+          <div class="metric-grid">
+            <div>
+              <span>Rule score</span>
+              <strong id="rule-score">—</strong>
+            </div>
+            <div>
+              <span>Full µMal</span>
+              <strong id="model-score">—</strong>
+            </div>
+            <div>
+              <span>Latency</span>
+              <strong id="latency">—</strong>
+            </div>
+          </div>
+
+          <div class="model-card">
+            <span class="model-symbol" aria-hidden="true">µ</span>
+            <div>
+              <strong id="model-title">Full model not loaded</strong>
+              <p id="model-copy">
+                Use the download control above before running a test.
+              </p>
+            </div>
+          </div>
+
+          <section class="result-section">
+            <div class="section-heading">
+              <h3>Evidence</h3>
+              <span id="evidence-count">0 signals</span>
+            </div>
+            <ol id="evidence-list" class="evidence-list">
+              <li class="empty-state">No analysis yet.</li>
+            </ol>
           </section>
 
-          <section
-            id="result-panel"
-            class="panel result-panel"
-            aria-label="Analysis result"
-            aria-live="polite"
-          >
-            <div class="panel-header result-header">
-              <div>
-                <p class="result-kicker">Assessment</p>
-                <h3 id="assessment-title">Waiting for source</h3>
-              </div>
-              <button
-                id="copy-json"
-                class="button secondary compact"
-                type="button"
-                disabled
-              >
-                Copy JSON
-              </button>
+          <section class="result-section">
+            <div class="section-heading">
+              <h3>MalIR behavior stream</h3>
+              <span id="event-count">0 events</span>
             </div>
-
-            <div class="score-summary">
-              <div
-                id="risk-gauge"
-                class="risk-gauge"
-                role="meter"
-                aria-label="Risk score"
-                aria-valuemin="0"
-                aria-valuemax="100"
-                aria-valuenow="0"
-              >
-                <div>
-                  <strong id="risk-score">—</strong>
-                  <span>/ 100</span>
-                </div>
-              </div>
-              <div class="summary-copy">
-                <span id="verdict-badge" class="verdict-badge neutral"
-                  >Not analyzed</span
-                >
-                <p id="assessment-copy">
-                  ITCS will show the operations and source lines that affect its
-                  score.
-                </p>
-              </div>
+            <div id="behavior-tokens" class="behavior-tokens">
+              <span class="empty-token">No behavior tokens</span>
             </div>
-
-            <div class="metric-grid">
-              <div>
-                <span>Rule score</span>
-                <strong id="rule-score">—</strong>
-              </div>
-              <div>
-                <span>µMal Nano</span>
-                <strong id="model-score">—</strong>
-              </div>
-              <div>
-                <span>Latency</span>
-                <strong id="latency">—</strong>
-              </div>
-            </div>
-
-            <div class="model-status">
-              <div class="model-symbol" aria-hidden="true">µ</div>
-              <div>
-                <strong id="model-title">Tiny behavior Transformer</strong>
-                <p id="model-copy">
-                  3,538 parameters · synthetic demo weights · uncertainty gate
-                </p>
-              </div>
-            </div>
-
-            <div class="evidence-section">
-              <div class="subheading">
-                <h4>Evidence</h4>
-                <span id="evidence-count">0 signals</span>
-              </div>
-              <ol id="evidence-list" class="evidence-list">
-                <li class="empty-state">No analysis yet.</li>
-              </ol>
-            </div>
-
-            <div class="behavior-section">
-              <div class="subheading">
-                <h4>MalIR behavior stream</h4>
-                <span id="event-count">0 events</span>
-              </div>
-              <div id="behavior-tokens" class="behavior-tokens">
-                <span class="empty-token">Waiting</span>
-              </div>
-            </div>
-
-            <ul id="warnings" class="warnings"></ul>
           </section>
-        </div>
-      </section>
 
-      <section
-        id="method"
-        class="method-section"
-        aria-labelledby="method-title"
-      >
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Under the hood</p>
-            <h2 id="method-title">Small compute, inspectable decisions</h2>
-          </div>
-          <p>
-            Browser demo: lexical MalIR-Lite. Python CLI: bounded AST frontend.
-          </p>
-        </div>
-        <ol class="method-grid">
-          <li>
-            <span>01</span>
-            <h3>Extract behavior</h3>
-            <p>
-              Recognize sources, transforms, sinks, phase, and line locations.
-              Source is read as text only.
-            </p>
-          </li>
-          <li>
-            <span>02</span>
-            <h3>Build evidence paths</h3>
-            <p>
-              Connect nearby operations into reviewable motifs such as
-              credential-to-network and download-to-exec.
-            </p>
-          </li>
-          <li>
-            <span>03</span>
-            <h3>Gate tiny intelligence</h3>
-            <p>
-              Only uncertain rule scores consult µMal Nano, a 3.5K-parameter
-              Transformer trained from scratch.
-            </p>
-          </li>
-        </ol>
-      </section>
-
-      <section
-        id="research"
-        class="research-section"
-        aria-labelledby="research-title"
-      >
-        <div class="section-heading">
-          <div>
-            <p class="eyebrow">Real-package pilot · 2026-08-12</p>
-            <h2 id="research-title">Useful evidence. Not a solved detector.</h2>
-          </div>
-          <p>
-            400 pinned OMCBench Python packages · 338 normalized-AST groups
-          </p>
-        </div>
-        <div class="research-grid">
-          <article>
-            <span>Ranking</span>
-            <strong>0.5837 → 0.5954</strong>
-            <p>Test average precision improved with bounded local flow.</p>
-          </article>
-          <article>
-            <span>Locked 1% FPR gate</span>
-            <strong>Unsupported</strong>
-            <p>Both variants reached 0/100 recall; the test was underpowered.</p>
-          </article>
-          <article>
-            <span>Safety</span>
-            <strong>0 payloads in Git</strong>
-            <p>No package was installed, imported, extracted, or executed.</p>
-          </article>
-        </div>
-        <p class="research-note">
-          The honest result is score saturation: flow improves ordering, while
-          package aggregation still produces too many benign high scores.
-          <a
-            href="https://github.com/bm-hien/is-this-code-safe/blob/main/docs/OMCBENCH_PILOT_2026-08-12.md"
-            rel="noreferrer"
-            >Read the reproducible report <span aria-hidden="true">→</span></a
-          >
-        </p>
-      </section>
-
-      <section
-        id="limits"
-        class="limits-section"
-        aria-labelledby="limits-title"
-      >
-        <div>
-          <p class="eyebrow">Honest by design</p>
-          <h2 id="limits-title">A triage signal, not a malware verdict.</h2>
-        </div>
-        <div class="limits-copy">
-          <p>
-            Static patterns can be benign, and obfuscation can hide malicious
-            behavior. “No malware evidence” never means “safe.” Use the result
-            to decide what to inspect next—not as the only basis for trust.
-          </p>
-          <a
-            href="https://github.com/bm-hien/is-this-code-safe#known-limits"
-            rel="noreferrer"
-          >
-            Read the threat model <span aria-hidden="true">→</span>
-          </a>
-        </div>
-      </section>
-    </main>
-
-    <footer>
-      <p><strong>ITCS</strong> · Open research prototype · MIT licensed</p>
-      <p>Built for low-cost CPU environments.</p>
-    </footer>
-
-    <script type="module" src="./app.mjs"></script>
+          <ul id="warnings" class="warnings">
+            <li>Analysis runs in this browser tab.</li>
+          </ul>
+        </section>
+      </main>
+    </div>
   </body>
 </html>
