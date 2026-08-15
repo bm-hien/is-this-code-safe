@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 
+from .policy import is_destructive_delete
 from .types import BehaviorPath, Event
 
 SOURCE_OPS = {
@@ -175,13 +176,16 @@ def build_behavior_paths(
                     "code writes to a common autostart location",
                     (sink_index,),
                 )
-            if sink.op == "FILE_DELETE":
+            if sink.op == "FILE_DELETE" and is_destructive_delete(
+                sink.target,
+                recursive=sink.detail == "recursive directory deletion",
+            ):
                 _append_structural(
                     paths,
                     seen,
                     "destructive_file_action",
                     18.0,
-                    "code deletes a file or directory",
+                    "code deletes broad, user-data, or recursive filesystem content",
                     (sink_index,),
                 )
     return sorted(

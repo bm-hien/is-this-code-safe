@@ -514,11 +514,12 @@ def _model_tokens(files: list[FileAnalysis]) -> list[str]:
             seen.add(key)
             file_tokens.append(token)
         for path in item.behavior_paths:
-            key = ("motif", path.motif)
+            token = path.token()
+            key = ("path", token)
             if key in seen:
                 continue
             seen.add(key)
-            file_tokens.append(f"MOTIF:{path.motif}")
+            file_tokens.append(token)
         for token in item.effect_summary.tokens:
             key = ("effect", token)
             if key in seen:

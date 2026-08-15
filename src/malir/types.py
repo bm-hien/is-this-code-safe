@@ -18,7 +18,7 @@ class PurposeCandidate:
     lines: tuple[int, ...] = ()
 
     def token(self) -> str:
-        return f"PURPOSE:{_effect_token(self.label)}"
+        return f"PURPOSE:{_effect_token(self.label)}|Q:{_effect_token(self.confidence)}"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -102,6 +102,13 @@ class BehaviorPath:
     evidence_kind: str = "proximity"
     confidence: str = "low"
 
+    def token(self) -> str:
+        return (
+            f"PATH:{_effect_token(self.motif)}"
+            f"|K:{_effect_token(self.evidence_kind)}"
+            f"|Q:{_effect_token(self.confidence)}"
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "motif": self.motif,
@@ -128,7 +135,7 @@ class FileAnalysis:
     @property
     def tokens(self) -> list[str]:
         tokens = [event.token() for event in self.events]
-        tokens.extend(f"MOTIF:{item.motif}" for item in self.behavior_paths)
+        tokens.extend(item.token() for item in self.behavior_paths)
         tokens.extend(self.effect_summary.tokens)
         return tokens
 

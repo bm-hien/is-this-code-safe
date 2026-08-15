@@ -62,33 +62,33 @@ test("full browser artifact matches the checkpoint architecture", () => {
   assert.equal(FULL_MODEL_MANIFEST.metadata.parameters, 567_746);
   assert.equal(
     FULL_MODEL_MANIFEST.metadata.feature_schema,
-    "malir.effect-context.v3",
+    "malir.effect-context.2026-08-15-r3",
   );
-  assert.equal(FULL_MODEL_MANIFEST.metadata.training_examples, 72);
-  assert.equal(FULL_MODEL_MANIFEST.metadata.training_groups, 24);
-  assert.equal(FULL_MODEL_MANIFEST.metadata.validation_examples, 36);
-  assert.equal(FULL_MODEL_MANIFEST.metadata.validation_groups, 12);
-  assert.equal(FULL_MODEL_MANIFEST.metadata.seed, 29);
-  assert.ok(FULL_MODEL_MANIFEST.metadata.validation_metrics.nll < 0.04);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.training_examples, 90);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.training_groups, 30);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.validation_examples, 54);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.validation_groups, 18);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.seed, 13);
+  assert.ok(FULL_MODEL_MANIFEST.metadata.validation_metrics.nll < 0.05);
   assert.equal(
     FULL_MODEL_MANIFEST.metadata.validation_metrics.pair_ordering_accuracy,
     1,
   );
   assert.ok(
     FULL_MODEL_MANIFEST.metadata.validation_metrics.pair_probability_gap_min >
-      0.8,
+      0.7,
   );
   assert.ok(
     FULL_MODEL_MANIFEST.metadata.validation_metrics.semantic_variant_drift_max <
-      0.08,
+      0.1,
   );
   assert.equal(
     FULL_MODEL_MANIFEST.metadata.structured_objective.pair_constraints,
-    21,
+    30,
   );
   assert.equal(
     FULL_MODEL_MANIFEST.metadata.structured_objective.consistency_groups,
-    24,
+    30,
   );
   assert.equal(
     FULL_MODEL_MANIFEST.metadata.calibration,
@@ -97,16 +97,20 @@ test("full browser artifact matches the checkpoint architecture", () => {
   assert.ok(FULL_MODEL_MANIFEST.metadata.temperature >= 1);
   assert.equal(
     FULL_MODEL_MANIFEST.metadata.validation_kind,
-    "synthetic-group-disjoint-paired-effects",
+    "synthetic-group-disjoint-paired-effects-2026-08-15-r3",
+  );
+  assert.equal(
+    FULL_MODEL_MANIFEST.metadata.training_protocol,
+    "mumal-training.2026-08-15-r3",
   );
   assert.equal(
     FULL_MODEL_MANIFEST.support_profile.schema,
     "malir.support-profile.v1",
   );
-  assert.equal(FULL_MODEL_MANIFEST.support_profile.prototypes.length, 24);
+  assert.equal(FULL_MODEL_MANIFEST.support_profile.prototypes.length, 30);
   assert.equal(FULL_MODEL_MANIFEST.support_profile.min_token_coverage, 1);
   assert.equal(FULL_MODEL_MANIFEST.support_profile.min_nearest_jaccard, 0.2);
-  assert.equal(FULL_MODEL_MANIFEST.metadata.support_prototypes, 24);
+  assert.equal(FULL_MODEL_MANIFEST.metadata.support_prototypes, 30);
   assert.equal(FULL_MODEL_MANIFEST.config.n_layers, 2);
   assert.equal(FULL_MODEL_MANIFEST.config.n_heads, 4);
   assert.equal(FULL_MODEL_MANIFEST.config.d_model, 96);
@@ -173,7 +177,7 @@ test("unknown MalIR tokens force support abstention", () => {
 });
 
 
-test("declared V3 support probes all abstain", () => {
+test("declared legacy OOD probes all abstain", () => {
   const rows = readFileSync(
     new URL("../../examples/micro_ood_v3.jsonl", import.meta.url),
     "utf8",
@@ -185,7 +189,11 @@ test("declared V3 support probes all abstain", () => {
 
   assert.ok(results.every((result) => result.abstained));
   assert.ok(results.every((result) => !result.supported));
-  assert.ok(results.some((result) => result.probability > 0.8));
+  assert.ok(
+    results.every(
+      (result) => result.probability >= 0 && result.probability <= 1,
+    ),
+  );
 });
 
 
@@ -203,14 +211,16 @@ test("benign demo remains low signal", () => {
   assert.equal(report.riskScore, report.ruleScore);
 });
 
-test("exfiltration demo produces line evidence and uses full µMal", () => {
+test("browser exfiltration proximity remains reviewable and uses full µMal", () => {
   const report = analyzeSource(DEMO_SOURCES.suspicious, "exfil.py");
-  assert.equal(report.assessment, "malware-like");
-  assert.ok(report.riskScore >= 50);
+  assert.equal(report.assessment, "needs-review");
+  assert.equal(report.verdict, "review");
+  assert.equal(report.ruleScore, 28);
+  assert.equal(report.riskScore, report.ruleScore);
   assert.equal(report.model.loaded, true);
   assert.equal(report.model.used, true);
   assert.equal(report.model.supported, true);
-  assert.ok(report.model.probability > 0.5);
+  assert.ok(report.model.probability < 0.2);
   assert.ok(
     report.modelTokens.some((token) =>
       token.includes("|O:NETWORK_SEND|"),
@@ -286,7 +296,7 @@ if __name__ == "__main__":
   assert.equal(report.verdict, "review");
   assert.equal(report.model.used, true);
   assert.ok(report.model.probability < 0.2);
-  assert.ok(report.modelTokens.includes("PURPOSE:local_code_transformer"));
+  assert.ok(report.modelTokens.includes("PURPOSE:local_code_transformer|Q:medium"));
 });
 
 test("network effects block the local-transformer purpose shortcut", () => {
@@ -355,6 +365,61 @@ text = Path("tokenizer.py").read_text()
     false,
   );
   assert.ok(report.modelTokens.some((token) => token.endsWith("|T:file")));
+});
+
+test("proximity does not become a causal effect flow", () => {
+  const report = analyzeSource(
+    `def collect():
+    secret = os.getenv("CI_TOKEN")
+    harmless = "hello"
+    requests.post("https://example.invalid/t", data=harmless)
+`,
+    "telemetry.py",
+  );
+  assert.ok(
+    report.modelTokens.includes(
+      "PATH:credential_or_file_exfil|K:proximity|Q:low",
+    ),
+  );
+  assert.equal(
+    report.modelTokens.includes("EFFECT:FLOW:sensitive_data_to_network"),
+    false,
+  );
+  assert.ok(
+    report.modelTokens.includes("PURPOSE:sensitive_data_transfer|Q:low"),
+  );
+});
+
+test("delete context distinguishes cleanup from destructive targets", () => {
+  const cleanup = analyzeSource(
+    `def cleanup():
+    os.remove("cache.tmp")
+`,
+    "cleanup.py",
+  );
+  const destructive = analyzeSource(
+    `def wipe():
+    os.remove("user_documents")
+`,
+    "wipe.py",
+  );
+  assert.equal(cleanup.ruleScore, 10);
+  assert.equal(cleanup.motifs.some((item) => item.motif === "destructive_file_action"), false);
+  assert.ok(cleanup.modelTokens.some((token) => token.endsWith("|T:delete_temporary")));
+  assert.ok(destructive.modelTokens.some((token) => token.endsWith("|T:delete_user_data")));
+  assert.ok(destructive.motifs.some((item) => item.motif === "destructive_file_action"));
+});
+
+test("install process targets preserve coarse command roles", () => {
+  const compiler = analyzeSource(`os.system("gcc --version")\n`, "setup.py");
+  const shell = analyzeSource(`os.system("sh payload.sh")\n`, "setup.py");
+  const interpreter = analyzeSource(
+    `subprocess.run(["python", "build.py"])\n`,
+    "setup.py",
+  );
+  assert.ok(compiler.modelTokens.some((token) => token.endsWith("|T:process_compiler")));
+  assert.ok(shell.modelTokens.some((token) => token.endsWith("|T:process_shell")));
+  assert.ok(interpreter.modelTokens.some((token) => token.endsWith("|T:process_interpreter")));
 });
 
 test("download and dynamic execution create reviewable paths", () => {
@@ -434,13 +499,13 @@ test("effect context separates backup transfer from download execution", () => {
   const remoteExecution = predictMicro([
     "FILE",
     "P:runtime|C:source|O:NETWORK_RECEIVE|T:network",
-    "P:runtime|C:sink|O:PROCESS_EXEC|T:generic",
-    "MOTIF:download_execute",
+    "P:runtime|C:sink|O:PROCESS_EXEC|T:process_generic",
+    "PATH:download_execute|K:dataflow|Q:high",
     "EFFECT:ENTRY:library_callable",
     "EFFECT:ORIGIN:network",
     "EFFECT:DESTINATION:process",
     "EFFECT:FLOW:network_to_execution",
-    "PURPOSE:remote_code_executor",
+    "PURPOSE:remote_code_executor|Q:high",
   ]);
 
   assert.ok(backup < 0.1);

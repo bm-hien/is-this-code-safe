@@ -53,13 +53,16 @@ Each event becomes one token:
 P:<phase>|C:<category>|O:<operation>|T:<normalized-target>
 ~~~
 
-Behavior paths append `MOTIF:<name>`. Effect summaries append
-`EFFECT:<dimension>:<value>` for `ENTRY`, `ORIGIN`, `DESTINATION`, `FLOW`, and
-`TRANSFORM`, plus `PURPOSE:<candidate>` tokens. The serialized file record
+Behavior paths append `PATH:<motif>|K:<evidence-kind>|Q:<confidence>` so
+causal evidence and weak proximity cannot collapse to the same model token.
+Effect summaries append `EFFECT:<dimension>:<value>` for `ENTRY`, `ORIGIN`,
+`DESTINATION`, `FLOW`, and `TRANSFORM`, plus
+`PURPOSE:<candidate>|Q:<confidence>` tokens. Proximity paths remain reviewable
+but do not create causal `EFFECT:FLOW` values. The serialized file record
 retains the complete deterministic token list. Model input uses a constant
-`FILE` boundary and compacts events by phase, category, operation, and
-a coarse target class. Concrete filenames and URLs are not model vocabulary;
-repeated syntax cannot crowd later semantic behavior out of a bounded context.
+`FILE` boundary and compacts events by phase, category, operation, and a coarse
+target class. Concrete filenames and URLs are not model vocabulary; repeated
+syntax cannot crowd later semantic behavior out of a bounded context.
 Sparse features use signed BLAKE2b hashing over one-to-three-token n-grams.
 µMal uses a separately personalized BLAKE2b hash into a fixed 4,096-token
 default vocabulary.
@@ -135,7 +138,7 @@ Supported motifs include:
 | encoded_execution | Decode/deserialization result reaches execution |
 | install_time_execution | Execution occurs during an install phase |
 | persistence_write | Write targets a common autostart location |
-| destructive_file_action | File or directory deletion |
+| destructive_file_action | Broad/user-data deletion or recursive deletion outside known temporary/build targets |
 
 The analysis is not whole-program flow. Direct-call summaries cover only
 unique, unrebound top-level functions reached through an unshadowed bare name in
@@ -145,14 +148,14 @@ imported or nested functions, methods, globals, closures, object attributes,
 mutation, generator iteration, async scheduling beyond immediate `await`,
 dynamic dispatch, decorators, exceptions, or other modules. Every path keeps
 its supporting real event indexes for review; the internal call-boundary marker
-is never serialized. Path tokens remain `MOTIF:<name>` regardless of evidence
-kind. Effect context changes the model-visible sequence. The current checkpoint
-declares `feature_schema = malir.effect-context.v3`; V3 adds controlled
-benign/positive effect pairs, a pair-ranking objective, variant consistency,
-and a checkpoint-bound training-support profile without changing the event
-vocabulary. V1/V2 checkpoints remain loadable but do not carry all V3 training
-or abstention guarantees. See
-[MICRO_TRAINING_V3_2026-08-14.md](MICRO_TRAINING_V3_2026-08-14.md).
+is never serialized. Path tokens preserve motif, evidence kind, and confidence. The selected
+checkpoint declares `feature_schema = malir.effect-context.2026-08-15-r3`.
+This dated contract also distinguishes temporary/user-data/broad deletion
+targets and compiler/shell/interpreter/build/package process targets. Historical
+V1/V2/V3 checkpoints remain loadable, but they do not carry the dated
+representation guarantees. See the [2026-08-15 research note](MALIR_MICRO_RESEARCH_2026-08-15.md) and
+the historical
+[V3 training note](MICRO_TRAINING_V3_2026-08-14.md).
 
 See [the bounded-summary design note](BOUNDED_CALL_SUMMARIES.md) for its
 research basis, conservative cases, and regression matrix.
@@ -198,7 +201,8 @@ means a supported sample entered this fusion gate; `model_consulted` also
 includes advisory inference outside it. V3 additionally exposes
 `model_supported`, `model_abstained`, token coverage, nearest train-group
 similarity, and the unknown-token list. An abstained probability remains
-auditable but cannot enter fusion.
+auditable but cannot enter fusion. The current support profile remains v1; a
+legal token absent from training can therefore still force abstention.
 
 µMal evaluates at most 254 behavior tokens plus boundary tokens per window.
 Longer compacted sequences use up to 16 overlapping windows and return the

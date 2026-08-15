@@ -304,7 +304,18 @@ class _BehaviorVisitor(ast.NodeVisitor):
                         "context",
                         "literal module import",
                     )
-            target = self._call_target(node, name) or name
+            target = (
+                self._process_target(node, name)
+                if op == "PROCESS_EXEC"
+                else self._call_target(node, name)
+            ) or name
+            if op == "FILE_DELETE":
+                if name == "shutil.rmtree":
+                    detail = "recursive directory deletion"
+                elif name.endswith(".rmdir"):
+                    detail = "directory deletion"
+                else:
+                    detail = "file deletion"
             if op == "FILE_READ" and is_sensitive_path(target):
                 op, detail = "SENSITIVE_FILE_READ", "sensitive file access"
             if op == "FILE_WRITE" and is_persistence_path(target):
@@ -373,6 +384,21 @@ class _BehaviorVisitor(ast.NodeVisitor):
         return any(
             item.arg in {"data", "json", "files", "content"} for item in node.keywords
         )
+
+    def _process_target(self, node: ast.Call, name: str) -> str | None:
+        candidates = list(node.args[:1])
+        candidates.extend(
+            keyword.value
+            for keyword in node.keywords
+            if keyword.arg in {"args", "cmd", "command", "executable"}
+        )
+        for value in candidates:
+            if isinstance(value, (ast.List, ast.Tuple)) and value.elts:
+                value = value.elts[0]
+            target = self._literal(value) or self._qualified_name(value)
+            if target:
+                return target
+        return name
 
     def _call_target(self, node: ast.Call, name: str) -> str | None:
         file_methods = (*READ_METHODS, *WRITE_METHODS)

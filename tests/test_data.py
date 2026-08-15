@@ -99,7 +99,9 @@ def test_v3_training_dataset_adds_paired_effect_roles():
     assert len({row.pair_id for row in dataset.validation if row.pair_id}) == 6
     assert sum(row.pair_id is not None for row in dataset.all_examples) == 78
     assert any(
-        "MOTIF:file_to_network" in row.tokens for row in dataset.train if row.label == 0
+        "PATH:file_to_network|K:dataflow|Q:high" in row.tokens
+        for row in dataset.train
+        if row.label == 0
     )
 
     profile = build_support_profile(
@@ -126,6 +128,131 @@ def test_v3_training_dataset_adds_paired_effect_roles():
     assert all(
         assess_model_support(probe["tokens"], profile).abstained for probe in probes
     )
+
+
+def test_2026_08_15_dataset_preserves_causal_evidence_strength():
+    dataset = load_training_dataset("examples/micro_train_2026_08_15.jsonl")
+
+    assert len(dataset.train) == 78
+    assert len(dataset.validation) == 42
+    assert len({row.group_id for row in dataset.train}) == 26
+    assert len({row.group_id for row in dataset.validation}) == 14
+    negative = next(
+        row
+        for row in dataset.train
+        if row.group_id == "train-unlinked-secret-telemetry-2026-08-15"
+        and row.sample_id.endswith("--base")
+    )
+    positive = next(
+        row
+        for row in dataset.train
+        if row.group_id == "train-exact-secret-exfil-2026-08-15"
+        and row.sample_id.endswith("--base")
+    )
+    assert "PATH:credential_or_file_exfil|K:proximity|Q:low" in negative.tokens
+    assert "EFFECT:FLOW:sensitive_data_to_network" not in negative.tokens
+    assert "PATH:credential_or_file_exfil|K:dataflow|Q:high" in positive.tokens
+    assert "EFFECT:FLOW:sensitive_data_to_network" in positive.tokens
+    assert negative.representation_hash != positive.representation_hash
+
+
+def test_2026_08_15_r2_dataset_adds_delete_context_pairs():
+    dataset = load_training_dataset("examples/micro_train_2026_08_15_r2.jsonl")
+
+    assert len(dataset.train) == 84
+    assert len(dataset.validation) == 48
+    assert len({row.group_id for row in dataset.train}) == 28
+    assert len({row.group_id for row in dataset.validation}) == 16
+    cleanup = next(
+        row
+        for row in dataset.train
+        if row.group_id == "train-temporary-cleanup-2026-08-15-r2"
+        and row.sample_id.endswith("--base")
+    )
+    destructive = next(
+        row
+        for row in dataset.train
+        if row.group_id == "train-destructive-delete-2026-08-15-r2"
+        and row.sample_id.endswith("--base")
+    )
+    assert "P:runtime|C:sink|O:FILE_DELETE|T:delete_temporary" in cleanup.tokens
+    assert not any(
+        token.startswith("PATH:destructive_file_action") for token in cleanup.tokens
+    )
+    assert "P:runtime|C:sink|O:FILE_DELETE|T:delete_user_data" in destructive.tokens
+    assert "PATH:destructive_file_action|K:structural|Q:high" in destructive.tokens
+    assert cleanup.representation_hash != destructive.representation_hash
+
+
+def test_source_path_controls_lifecycle_for_source_training_rows(tmp_path):
+    manifest = tmp_path / "samples.jsonl"
+    rows = [
+        {
+            "sample_id": "install-negative",
+            "group_id": "install-negative",
+            "split": "train",
+            "role": "compiler",
+            "label": 0,
+            "source": "os.system('gcc --version')",
+            "source_path": "setup.py",
+        },
+        {
+            "sample_id": "install-positive",
+            "group_id": "install-positive",
+            "split": "train",
+            "role": "shell",
+            "label": 1,
+            "source": "os.system('sh payload.sh')",
+            "source_path": "setup.py",
+        },
+        {
+            "sample_id": "validation-negative",
+            "group_id": "validation-negative",
+            "split": "validation",
+            "role": "compiler",
+            "label": 0,
+            "source": "platform.platform(); subprocess.run(['/usr/bin/clang'])",
+            "source_path": "setup.py",
+        },
+        {
+            "sample_id": "validation-positive",
+            "group_id": "validation-positive",
+            "split": "validation",
+            "role": "shell",
+            "label": 1,
+            "source": "platform.platform(); subprocess.run(['sh', 'payload.sh'])",
+            "source_path": "setup.py",
+        },
+    ]
+    manifest.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+    dataset = load_training_dataset(manifest)
+    assert (
+        "P:install|C:sink|O:PROCESS_EXEC|T:process_compiler" in dataset.train[0].tokens
+    )
+    assert "P:install|C:sink|O:PROCESS_EXEC|T:process_shell" in dataset.train[1].tokens
+
+
+def test_2026_08_15_r3_dataset_adds_install_process_pairs():
+    dataset = load_training_dataset("examples/micro_train_2026_08_15_r3.jsonl")
+    assert len(dataset.train) == 90
+    assert len(dataset.validation) == 54
+    assert len({row.group_id for row in dataset.train}) == 30
+    assert len({row.group_id for row in dataset.validation}) == 18
+    compiler = next(
+        row
+        for row in dataset.train
+        if row.group_id == "train-install-compiler-2026-08-15-r3"
+        and row.sample_id.endswith("--base")
+    )
+    shell = next(
+        row
+        for row in dataset.train
+        if row.group_id == "train-install-shell-2026-08-15-r3"
+        and row.sample_id.endswith("--base")
+    )
+    assert "P:install|C:sink|O:PROCESS_EXEC|T:process_compiler" in compiler.tokens
+    assert "P:install|C:sink|O:PROCESS_EXEC|T:process_shell" in shell.tokens
+    assert compiler.representation_hash != shell.representation_hash
 
 
 def test_training_dataset_rejects_group_leakage(tmp_path):

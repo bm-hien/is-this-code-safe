@@ -94,7 +94,8 @@ export function effectTokens(summary) {
   );
   output.push(
     ...summary.purposeCandidates.map(
-      (item) => `PURPOSE:${normalize(item.label)}`,
+      (item) =>
+        `PURPOSE:${normalize(item.label)}|Q:${normalize(item.confidence || "low")}`,
     ),
   );
   return output;
@@ -324,7 +325,10 @@ export function summarizeEffects(source, events, motifs) {
   if (anchors.size >= 2) transformations.add("code-generation");
 
   const flows = new Set(
-    motifs.map((motif) => FLOW_BY_MOTIF[motif.motif]).filter(Boolean),
+    motifs
+      .filter((motif) => motif.evidenceKind !== "proximity")
+      .map((motif) => FLOW_BY_MOTIF[motif.motif])
+      .filter(Boolean),
   );
   if (reachablePipelines.size) {
     flows.add("local-file-to-local-artifact");

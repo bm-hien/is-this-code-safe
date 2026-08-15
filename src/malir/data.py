@@ -221,7 +221,8 @@ def _tokens_for_record(
     if "source" in record:
         if not isinstance(record["source"], str):
             raise TypeError("source must be text")
-        return extractor.analyze_source(record["source"]).tokens
+        source_path = str(record.get("source_path", "<dataset>"))
+        return extractor.analyze_source(record["source"], source_path).tokens
     if "path" in record:
         raw_path = base / str(record["path"])
         source_path = raw_path.resolve()

@@ -235,6 +235,132 @@ PERSISTENCE_PATH_MARKERS = (
     "sitecustomize.py",
 )
 
+_DELETE_TEMP_NAMES = {"__pycache__", ".cache", "build", "cache", "dist", "temp", "tmp"}
+_DELETE_TEMP_MARKERS = (
+    "/__pycache__/",
+    "/.cache/",
+    "/build/",
+    "/cache/",
+    "/dist/",
+    "/temp/",
+    "/tmp/",
+)
+_DELETE_USER_DATA_MARKERS = (
+    "/desktop/",
+    "/documents/",
+    "/downloads/",
+    "/music/",
+    "/pictures/",
+    "/videos/",
+    "credentials",
+    "id_ed25519",
+    "id_rsa",
+    "user_documents",
+    "wallet",
+)
+_DELETE_BROAD_TARGETS = {"*", "**", "/", ".", "..", "~"}
+_PROCESS_SHELLS = {
+    "bash",
+    "cmd",
+    "cmd.exe",
+    "powershell",
+    "powershell.exe",
+    "pwsh",
+    "sh",
+    "wscript",
+    "wscript.exe",
+    "zsh",
+}
+_PROCESS_INTERPRETERS = {
+    "node",
+    "perl",
+    "pypy",
+    "pypy3",
+    "python",
+    "python.exe",
+    "python3",
+    "pythonw",
+    "pythonw.exe",
+    "ruby",
+    "sys.executable",
+}
+_PROCESS_COMPILERS = {
+    "c++",
+    "cc",
+    "clang",
+    "clang++",
+    "g++",
+    "gcc",
+    "go",
+    "javac",
+    "rustc",
+}
+_PROCESS_BUILD_TOOLS = {
+    "cmake",
+    "make",
+    "meson",
+    "ninja",
+}
+_PROCESS_PACKAGE_TOOLS = {
+    "cargo",
+    "npm",
+    "pip",
+    "pip3",
+    "pnpm",
+    "poetry",
+    "uv",
+    "yarn",
+}
+
+
+def process_target_class(value: str | None) -> str:
+    if not value:
+        return "generic"
+    normalized = value.strip().lower().replace("\\", "/")
+    head = normalized.split(maxsplit=1)[0].strip("\"'")
+    name = head.rsplit("/", 1)[-1]
+    serialized_head = name.split("_", 1)[0]
+    candidates = {name, serialized_head}
+    if normalized == "sys.executable" or candidates & _PROCESS_INTERPRETERS:
+        return "interpreter"
+    if candidates & _PROCESS_SHELLS:
+        return "shell"
+    if candidates & _PROCESS_COMPILERS:
+        return "compiler"
+    if candidates & _PROCESS_BUILD_TOOLS:
+        return "build_tool"
+    if candidates & _PROCESS_PACKAGE_TOOLS:
+        return "package_tool"
+    return "generic"
+
+
+def delete_target_class(value: str | None) -> str:
+    if not value:
+        return "generic"
+    normalized = value.lower().replace("\\", "/").strip()
+    basename = normalized.rstrip("/").rsplit("/", 1)[-1]
+    if normalized in _DELETE_BROAD_TARGETS or "*" in normalized:
+        return "broad"
+    if (
+        basename in _DELETE_TEMP_NAMES
+        or basename.endswith((".pyc", ".tmp"))
+        or basename.startswith(("cache.", "tmp."))
+        or any(marker in normalized for marker in _DELETE_TEMP_MARKERS)
+    ):
+        return "temporary"
+    if any(
+        marker in f"/{normalized.strip('/')}/" for marker in _DELETE_USER_DATA_MARKERS
+    ):
+        return "user_data"
+    return "generic"
+
+
+def is_destructive_delete(value: str | None, *, recursive: bool = False) -> bool:
+    target_class = delete_target_class(value)
+    return target_class in {"broad", "user_data"} or (
+        recursive and target_class != "temporary"
+    )
+
 
 def contains_marker(value: str | None, markers: Iterable[str]) -> bool:
     if not value:

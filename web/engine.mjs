@@ -252,6 +252,33 @@ const PERSISTENCE_MARKERS = Object.freeze([
   "sitecustomize.py",
 ]);
 
+const DELETE_TEMP_NAMES = new Set([
+  "__pycache__", ".cache", "build", "cache", "dist", "temp", "tmp",
+]);
+const DELETE_TEMP_MARKERS = Object.freeze([
+  "/__pycache__/", "/.cache/", "/build/", "/cache/", "/dist/", "/temp/", "/tmp/",
+]);
+const DELETE_USER_DATA_MARKERS = Object.freeze([
+  "/desktop/", "/documents/", "/downloads/", "/music/", "/pictures/",
+  "/videos/", "credentials", "id_ed25519", "id_rsa", "user_documents", "wallet",
+]);
+const DELETE_BROAD_TARGETS = new Set(["*", "**", "/", ".", "..", "~"]);
+const PROCESS_SHELLS = new Set([
+  "bash", "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "sh",
+  "wscript", "wscript.exe", "zsh",
+]);
+const PROCESS_INTERPRETERS = new Set([
+  "node", "perl", "pypy", "pypy3", "python", "python.exe", "python3", "pythonw",
+  "pythonw.exe", "ruby", "sys.executable",
+]);
+const PROCESS_COMPILERS = new Set([
+  "c++", "cc", "clang", "clang++", "g++", "gcc", "go", "javac", "rustc",
+]);
+const PROCESS_BUILD_TOOLS = new Set(["cmake", "make", "meson", "ninja"]);
+const PROCESS_PACKAGE_TOOLS = new Set([
+  "cargo", "npm", "pip", "pip3", "pnpm", "poetry", "uv", "yarn",
+]);
+
 const SOURCE_OPS = new Set([
   "ENV_READ",
   "SENSITIVE_FILE_READ",
@@ -284,6 +311,43 @@ function isPersistencePath(value) {
     return true;
   }
   return (normalized.split("/").at(-1) || "").endsWith(".pth");
+}
+
+function processTargetClass(value) {
+  const normalized = String(value || "").trim().toLowerCase().replaceAll("\\", "/");
+  if (!normalized) return "generic";
+  const head = normalized.split(/\s+/, 1)[0].replace(/^["']|["']$/g, "");
+  const name = head.split("/").at(-1) || head;
+  if (normalized === "sys.executable" || PROCESS_INTERPRETERS.has(name)) return "interpreter";
+  if (PROCESS_SHELLS.has(name)) return "shell";
+  if (PROCESS_COMPILERS.has(name)) return "compiler";
+  if (PROCESS_BUILD_TOOLS.has(name)) return "build_tool";
+  if (PROCESS_PACKAGE_TOOLS.has(name)) return "package_tool";
+  return "generic";
+}
+
+function deleteTargetClass(value) {
+  const normalized = String(value || "").toLowerCase().replaceAll("\\", "/").trim();
+  if (!normalized) return "generic";
+  const basename = normalized.replace(/\/$/, "").split("/").at(-1) || "";
+  if (DELETE_BROAD_TARGETS.has(normalized) || normalized.includes("*")) return "broad";
+  if (
+    DELETE_TEMP_NAMES.has(basename) ||
+    basename.endsWith(".pyc") ||
+    basename.endsWith(".tmp") ||
+    basename.startsWith("cache.") ||
+    basename.startsWith("tmp.") ||
+    DELETE_TEMP_MARKERS.some((marker) => normalized.includes(marker))
+  ) return "temporary";
+  const padded = `/${normalized.replace(/^\/+|\/+$/g, "")}/`;
+  if (DELETE_USER_DATA_MARKERS.some((marker) => padded.includes(marker))) return "user_data";
+  return "generic";
+}
+
+function isDestructiveDelete(value, recursive = false) {
+  const targetClass = deleteTargetClass(value);
+  return ["broad", "user_data"].includes(targetClass) ||
+    (recursive && targetClass !== "temporary");
 }
 
 function resolveName(name, aliases) {
@@ -563,6 +627,17 @@ function extractEvents(source, fileName) {
       } else {
         classified = classifyCall(name, hasPayload);
       }
+      if (classified?.op === "FILE_DELETE") {
+        classified = {
+          ...classified,
+          detail:
+            name === "shutil.rmtree"
+              ? "recursive directory deletion"
+              : name.endsWith(".rmdir")
+                ? "directory deletion"
+                : "file deletion",
+        };
+      }
       if (classified?.op === "DYNAMIC_IMPORT") {
         const literalModule = literalImportTarget(
           line,
@@ -729,11 +804,17 @@ function buildMotifs(events, windowSize = 12) {
           "high",
         );
       }
-      if (sink.op === "FILE_DELETE") {
+      if (
+        sink.op === "FILE_DELETE" &&
+        isDestructiveDelete(
+          sink.target,
+          sink.detail === "recursive directory deletion",
+        )
+      ) {
         append(
           "destructive_file_action",
           18,
-          "code deletes a file or directory",
+          "code deletes broad, user-data, or recursive filesystem content",
           [sinkIndex],
           "structural",
           "high",
@@ -824,7 +905,13 @@ function modelTargetClass(event) {
   if (event.op === "ENV_READ" && containsMarker(target, SENSITIVE_ENV_MARKERS)) {
     return "sensitive";
   }
-  if (["FILE_READ", "FILE_WRITE", "FILE_DELETE"].includes(event.op)) {
+  if (event.op === "PROCESS_EXEC") {
+    return `process_${processTargetClass(event.target)}`;
+  }
+  if (event.op === "FILE_DELETE") {
+    return `delete_${deleteTargetClass(event.target)}`;
+  }
+  if (["FILE_READ", "FILE_WRITE"].includes(event.op)) {
     return "file";
   }
   if (target.includes("/") || target.startsWith(".")) return "path";
@@ -850,10 +937,13 @@ function canonicalTokens(events, motifs, effectSummary, _fileName) {
     );
   }
   for (const motif of motifs) {
-    const key = `motif:${motif.motif}`;
+    const token =
+      `PATH:${motif.motif}|K:${motif.evidenceKind || "proximity"}` +
+      `|Q:${motif.confidence || "low"}`;
+    const key = `path:${token}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    tokens.push(`MOTIF:${motif.motif}`);
+    tokens.push(token);
   }
   for (const token of effectSummary.tokens) {
     const key = `effect:${token}`;

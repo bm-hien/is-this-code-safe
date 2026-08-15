@@ -31,13 +31,13 @@ SMOKE_TOKENS = (
         "P:runtime|C:source|O:ENV_READ|T:sensitive",
         "P:runtime|C:transform|O:ENCODE|T:generic",
         "P:runtime|C:sink|O:NETWORK_SEND|T:network",
-        "MOTIF:credential_or_file_exfil",
+        "PATH:credential_or_file_exfil|K:dataflow|Q:high",
         "EFFECT:ENTRY:library_callable",
         "EFFECT:ORIGIN:environment",
         "EFFECT:DESTINATION:network",
         "EFFECT:FLOW:sensitive_data_to_network",
         "EFFECT:TRANSFORM:encoding",
-        "PURPOSE:sensitive_data_transfer",
+        "PURPOSE:sensitive_data_transfer|Q:high",
     ),
 )
 
@@ -220,6 +220,7 @@ def export_checkpoint(
             "temperature": checkpoint_metadata.get("temperature", 1.0),
             "calibration": checkpoint_metadata.get("calibration", "unknown"),
             "validation_kind": checkpoint_metadata.get("validation_kind"),
+            "training_protocol": checkpoint_metadata.get("training_protocol"),
             "dataset_sha256": checkpoint_metadata.get("dataset_sha256"),
             "split_fingerprint": checkpoint_metadata.get("split_fingerprint"),
             "label_smoothing": checkpoint_metadata.get("label_smoothing"),
@@ -283,7 +284,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dataset",
         type=Path,
-        default=Path("examples/micro_train_v3.jsonl"),
+        default=Path("examples/micro_train_2026_08_15_r3.jsonl"),
     )
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--batch-size", type=int, default=8)
@@ -335,14 +336,15 @@ def main() -> None:
             patience=args.patience,
             minimum_epochs=args.minimum_epochs,
             checkpoint_metadata={
-                "feature_schema": "malir.effect-context.v3",
+                "feature_schema": "malir.effect-context.2026-08-15-r3",
                 "dataset_sha256": dataset.dataset_sha256,
                 "split_fingerprint": dataset.split_fingerprint,
                 "training_groups": len(train_groups),
                 "validation_groups": len(validation_groups),
                 "training_roles": sorted({row.role for row in dataset.train}),
                 "validation_roles": sorted({row.role for row in dataset.validation}),
-                "validation_kind": "synthetic-group-disjoint-paired-effects",
+                "validation_kind": "synthetic-group-disjoint-paired-effects-2026-08-15-r3",
+                "training_protocol": "mumal-training.2026-08-15-r3",
                 "support_profile": support_profile,
             },
         )

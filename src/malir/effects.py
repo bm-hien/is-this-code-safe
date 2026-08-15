@@ -144,7 +144,7 @@ def build_effect_summary(
     flows = {
         _FLOW_BY_MOTIF[path.motif]
         for path in behavior_paths
-        if path.motif in _FLOW_BY_MOTIF
+        if path.motif in _FLOW_BY_MOTIF and path.evidence_kind != "proximity"
     }
     reachable_pipeline = pipelines & reachable
     if reachable_pipeline or (not guards and pipelines):

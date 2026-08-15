@@ -60,8 +60,9 @@ can make source triage cheaper, more auditable, and reusable across languages.
 
 See [MalIR v1](docs/MALIR_SPEC.md) for the language-neutral contract,
 [effect and purpose context](docs/EFFECT_PURPOSE_V1_2026-08-14.md) for the
-capability/purpose split, [µMal V3 training](docs/MICRO_TRAINING_V3_2026-08-14.md)
-for paired-effect training and support-aware abstention, and
+capability/purpose split, the
+[2026-08-15 MalIR/µMal research note](docs/MALIR_MICRO_RESEARCH_2026-08-15.md)
+for the current dated representation and checkpoint, and
 [the research plan](docs/RESEARCH.md) for claim gates.
 
 ## Current capabilities
@@ -86,9 +87,9 @@ for paired-effect training and support-aware abstention, and
 - Includes a dependency-free hashed online logistic classifier.
 - Includes full µMal: a 567,746-parameter behavior Transformer trained from
   scratch with classification, masked-token, paired-ranking, and
-  variant-consistency objectives. The published V3 checkpoint uses 24 train
-  groups, 12 group-disjoint synthetic validation groups, early stopping,
-  label smoothing, and validation-only temperature fitting.
+  variant-consistency objectives. The selected 2026-08-15-r3 checkpoint uses
+  30 train groups, 18 group-disjoint synthetic validation groups, early
+  stopping, label smoothing, and validation-only temperature fitting.
 - Declares a deterministic training-support profile. Unknown MalIR tokens or
   compositions too far from every train-group prototype make µMal abstain; its
   probability remains auditable but cannot change the capability score.
@@ -142,7 +143,7 @@ For the optional full µMal environment:
 
 ~~~bash
 make bootstrap-micro
-.venv/bin/python scripts/build_micro_dataset_v3.py
+.venv/bin/python scripts/build_micro_dataset_2026_08_15_r3.py
 .venv/bin/python scripts/train_web_model.py --train
 .venv/bin/itcs scan path/to/source \
   --micro-model artifacts/micro.pt --threads 2
@@ -156,13 +157,14 @@ For the much smaller dependency-free online model:
   --model artifacts/sparse.model.json
 ~~~
 
-The published V3 corpus has 108 synthetic rows across 36 behavior groups:
-72 rows/24 groups for training and 36 rows/12 groups for validation. It adds
-13 controlled effect pairs and three semantic-context variants per group.
+The selected 2026-08-15-r3 corpus has 144 synthetic rows across 48 behavior
+groups: 90 rows/30 groups for training and 54 rows/18 groups for validation.
+It preserves path evidence strength and adds controlled causal-flow, deletion,
+and install-process contrasts with three semantic-context variants per group.
 Exact model-visible representations and group IDs cannot cross the split.
-The V2 and older 44-row files remain historical/compatibility fixtures. These
-synthetic corpora are not evidence of real-world detection quality; see the
-[V3 training note](docs/MICRO_TRAINING_V3_2026-08-14.md).
+Older V1/V2/V3 corpora remain historical/compatibility fixtures. These synthetic
+corpora are not evidence of real-world detection quality; see the
+[2026-08-15 research note](docs/MALIR_MICRO_RESEARCH_2026-08-15.md).
 
 ## Browser analyzer
 
@@ -254,9 +256,11 @@ and model transfer are measured.
 
 ### Phase 1 — harden the shared core and Python reference frontend
 
-- Semantic repeat saturation and group-disjoint paired-effect µMal V3 training
-  with training-support abstention are implemented; package-level calibration
-  against observed hard negatives and locked holdouts remains pending.
+- Semantic repeat saturation and dated group-disjoint µMal training with
+  training-support abstention are implemented. The 2026-08-15-r3 contract
+  preserves path confidence and coarse deletion/process context; package-level
+  calibration against observed hard negatives and locked holdouts remains
+  pending.
 - Bounded direct-call summaries without whole-program graph construction:
   implemented; evaluation against locked corpora remains pending.
 - Build a provenance-rich, statistically powered evaluation corpus.

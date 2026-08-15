@@ -168,6 +168,44 @@ def test_literal_dunder_import_is_context_not_dynamic_loading():
     assert operations.count("DYNAMIC_IMPORT") == 1
 
 
+def test_temporary_cleanup_does_not_become_destructive_behavior():
+    result = PythonExtractor().analyze_source(
+        "def cleanup():\n    os.remove('cache.tmp')\n",
+        "cleanup.py",
+    )
+    assert [event.op for event in result.events] == ["FILE_DELETE"]
+    assert result.events[0].detail == "file deletion"
+    assert "destructive_file_action" not in [
+        path.motif for path in result.behavior_paths
+    ]
+    assert "code-to-filesystem-delete" not in result.effect_summary.flows
+    assert result.effect_summary.primary_purpose == "unknown"
+    decision = decide([result])
+    assert decision.rule_score == 10.0
+    assert decision.verdict == "low-signal"
+
+
+def test_user_data_and_recursive_delete_remain_destructive():
+    user_data = PythonExtractor().analyze_source(
+        "def wipe():\n    os.remove('user_documents')\n"
+    )
+    recursive = PythonExtractor().analyze_source(
+        "def wipe():\n    shutil.rmtree('payloads')\n"
+    )
+    build_cleanup = PythonExtractor().analyze_source(
+        "def cleanup():\n    shutil.rmtree('build')\n"
+    )
+    assert "destructive_file_action" in [
+        path.motif for path in user_data.behavior_paths
+    ]
+    assert "destructive_file_action" in [
+        path.motif for path in recursive.behavior_paths
+    ]
+    assert "destructive_file_action" not in [
+        path.motif for path in build_cleanup.behavior_paths
+    ]
+
+
 def test_effect_summary_recognizes_explicit_local_code_transformer():
     source = (
         "import ast\n"
@@ -191,7 +229,30 @@ def test_effect_summary_recognizes_explicit_local_code_transformer():
     assert "code-generation" in summary.transformations
     assert "EFFECT:ORIGIN:local_file" in summary.tokens
     assert "EFFECT:DESTINATION:local_artifact" in summary.tokens
-    assert "PURPOSE:local_code_transformer" in summary.tokens
+    assert "PURPOSE:local_code_transformer|Q:high" in summary.tokens
+
+
+def test_proximity_path_is_not_promoted_to_causal_effect_flow():
+    source = """
+import os
+import requests
+
+def collect():
+    secret = os.getenv("CI_TOKEN")
+    harmless = "hello"
+    requests.post("https://example.invalid/telemetry", data=harmless)
+"""
+    result = PythonExtractor().analyze_source(source, "telemetry.py")
+    path = next(
+        item
+        for item in result.behavior_paths
+        if item.motif == "credential_or_file_exfil"
+    )
+    assert path.evidence_kind == "proximity"
+    assert path.confidence == "low"
+    assert "sensitive-data-to-network" not in result.effect_summary.flows
+    assert "PATH:credential_or_file_exfil|K:proximity|Q:low" in result.tokens
+    assert "PURPOSE:sensitive_data_transfer|Q:low" in result.tokens
 
 
 def test_network_effect_blocks_local_transformer_purpose_candidate():
