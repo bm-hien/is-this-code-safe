@@ -12,7 +12,7 @@ import ast
 from collections.abc import Iterable
 
 from .motifs import make_dataflow_path
-from .policy import is_sensitive_env_name
+from .policy import OUTBOUND_REQUEST_CALLS, is_sensitive_env_name
 from .types import BehaviorPath, Event
 
 Trace = tuple[int, ...]
@@ -547,6 +547,14 @@ class _LocalFlowAnalyzer:
 
         operation = self.events[event_index].op
         if operation in VALUE_SOURCES:
+            if (
+                operation == "NETWORK_RECEIVE"
+                and self.call_names.get(id(node), "") in OUTBOUND_REQUEST_CALLS
+            ):
+                self._record_request_sink(
+                    event_index,
+                    self._request_payload(arguments, keywords),
+                )
             if operation in {"FILE_READ", "SENSITIVE_FILE_READ"} and all_inputs:
                 return self._append_event(
                     all_inputs,
@@ -715,6 +723,19 @@ class _LocalFlowAnalyzer:
             trace if _SUMMARY_BOUNDARY in trace else (*trace, _SUMMARY_BOUNDARY)
             for trace in traces
         )
+
+    def _request_payload(
+        self,
+        arguments: list[Traces],
+        keywords: list[tuple[str | None, Traces]],
+    ) -> Traces:
+        selected: list[Traces] = list(arguments[:1])
+        selected.extend(
+            traces
+            for keyword, traces in keywords
+            if keyword is None or keyword in {"url", "params"}
+        )
+        return self._merge(*selected)
 
     def _sink_payload(
         self,
@@ -925,6 +946,30 @@ class _LocalFlowAnalyzer:
     @staticmethod
     def _file_stage_key(name: str) -> str:
         return f"{_FILE_STAGE_PREFIX}{name}"
+
+    def _record_request_sink(self, sink_index: int, traces: Traces) -> None:
+        for trace in traces:
+            expanded = self._append_trace(trace, sink_index)
+            through_summary = _SUMMARY_BOUNDARY in expanded
+            chain = tuple(index for index in expanded if index >= 0)
+            operations = [self.events[index].op for index in chain]
+            if "SYSTEM_DISCOVERY" in operations:
+                self._record_from_operation(
+                    "fingerprinting_transfer",
+                    chain,
+                    {"SYSTEM_DISCOVERY"},
+                    through_summary,
+                )
+            if any(
+                operation in {"FILE_READ", "SENSITIVE_FILE_READ"}
+                for operation in operations
+            ):
+                self._record_from_operation(
+                    "file_to_network",
+                    chain,
+                    {"FILE_READ", "SENSITIVE_FILE_READ"},
+                    through_summary,
+                )
 
     def _record_sink(self, sink_index: int, traces: Traces) -> None:
         sink = self.events[sink_index]

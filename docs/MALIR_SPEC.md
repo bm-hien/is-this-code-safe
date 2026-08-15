@@ -151,14 +151,20 @@ its supporting real event indexes for review; the internal call-boundary marker
 is never serialized. Path tokens preserve motif, evidence kind, and confidence.
 The selected µMal checkpoint still declares
 `feature_schema = malir.effect-context.2026-08-15-r3`. MalIR 2026-08-15-r4
-additionally hardens literal single-component `__import__` chains, assigned
-file-handle provenance, legacy `urllib.urlopen`/`os.startfile` capabilities, and
-sensitive-environment qualification. The dated representation also distinguishes
-temporary/user-data/broad deletion targets and compiler/shell/interpreter/build/
-package process targets. Historical V1/V2/V3 checkpoints remain loadable, but
-they do not carry the dated representation guarantees. See the
-[2026-08-15 checkpoint note](MALIR_MICRO_RESEARCH_2026-08-15.md), the
-[r4 research note](MALIR_RESEARCH_2026-08-15-r4.md), and the historical
+adds literal single-component `__import__` chains, assigned file-handle
+provenance, legacy `urllib.urlopen`/`os.startfile` capabilities, and
+sensitive-environment qualification. MalIR 2026-08-15-r5 additionally scopes
+assignment aliases across functions/classes, preserves a verified raw-socket
+type through SSL wrapping, models Python dotted-import binding correctly, and
+permits host/file provenance in GET-like URL/`params` request arguments to form
+causal transfer paths. Environment secrets, authentication headers, and cookies
+are intentionally excluded from that GET rule. The dated representation also
+distinguishes temporary/user-data/broad deletion targets and compiler/shell/
+interpreter/build/package process targets. Historical V1/V2/V3 checkpoints
+remain loadable, but they do not carry the dated representation guarantees. See
+the [2026-08-15 checkpoint note](MALIR_MICRO_RESEARCH_2026-08-15.md), the
+[r4 research note](MALIR_RESEARCH_2026-08-15-r4.md), the
+[r5 research note](MALIR_RESEARCH_2026-08-15-r5.md), and the historical
 [V3 training note](MICRO_TRAINING_V3_2026-08-14.md).
 
 See [the bounded-summary design note](BOUNDED_CALL_SUMMARIES.md) for its

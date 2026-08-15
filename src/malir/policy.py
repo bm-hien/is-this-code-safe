@@ -4,6 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+OUTBOUND_REQUEST_CALLS = frozenset(
+    {
+        "requests.get",
+        "requests.Session.get",
+        "httpx.get",
+        "httpx.Client.get",
+        "aiohttp.ClientSession.get",
+    }
+)
+
 CALL_GROUPS: tuple[tuple[frozenset[str], str, str, str], ...] = (
     (
         frozenset(

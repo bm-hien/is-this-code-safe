@@ -15,6 +15,7 @@ from .effects import build_effect_summary
 from .flow import build_local_dataflow_paths
 from .motifs import build_behavior_paths
 from .policy import (
+    OUTBOUND_REQUEST_CALLS,
     READ_METHODS,
     WRITE_METHODS,
     classify_call,
@@ -29,6 +30,7 @@ _DATAFLOW_SEND_SOURCES = {
     "FILE_READ",
     "SYSTEM_DISCOVERY",
 }
+_REQUEST_FLOW_SOURCES = {"FILE_READ", "SENSITIVE_FILE_READ", "SYSTEM_DISCOVERY"}
 _DATAFLOW_EXEC_SOURCES = {"NETWORK_RECEIVE", "DECODE", "UNSAFE_DESERIALIZE"}
 _DATAFLOW_EXEC_SINKS = {"DYNAMIC_EXEC", "PROCESS_EXEC"}
 
@@ -124,6 +126,18 @@ class PythonExtractor:
         return result
 
 
+def _argument_names(arguments: ast.arguments) -> set[str]:
+    names = {
+        arg.arg
+        for arg in (*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs)
+    }
+    if arguments.vararg is not None:
+        names.add(arguments.vararg.arg)
+    if arguments.kwarg is not None:
+        names.add(arguments.kwarg.arg)
+    return names
+
+
 class _BehaviorVisitor(ast.NodeVisitor):
     def __init__(
         self,
@@ -138,6 +152,8 @@ class _BehaviorVisitor(ast.NodeVisitor):
         self.events: list[Event] = []
         self.event_limit_reached = False
         self.aliases: dict[str, str] = {}
+        self.shadowed_names: set[str] = set()
+        self.class_alias_bases: list[tuple[dict[str, str], set[str], int]] = []
         self.function_stack: list[str] = []
         self.node_events: dict[int, list[int]] = {}
         self.call_names: dict[int, str] = {}
@@ -192,8 +208,14 @@ class _BehaviorVisitor(ast.NodeVisitor):
 
     def visit_Import(self, node: ast.Import) -> None:
         for item in node.names:
-            local = item.asname or item.name.split(".")[0]
-            self.aliases[local] = item.name
+            if item.asname:
+                local = item.asname
+                qualified = item.name
+            else:
+                local = item.name.split(".")[0]
+                qualified = local
+            self.aliases[local] = qualified
+            self.shadowed_names.discard(local)
             self._add(node, "IMPORT", "context", item.name, "module import")
         self.generic_visit(node)
 
@@ -201,7 +223,9 @@ class _BehaviorVisitor(ast.NodeVisitor):
         module = node.module or ""
         for item in node.names:
             full_name = f"{module}.{item.name}".strip(".")
-            self.aliases[item.asname or item.name] = full_name
+            local = item.asname or item.name
+            self.aliases[local] = full_name
+            self.shadowed_names.discard(local)
             self._add(node, "IMPORT", "context", full_name, "symbol import")
         self.generic_visit(node)
 
@@ -213,6 +237,10 @@ class _BehaviorVisitor(ast.NodeVisitor):
                 continue
             if qualified:
                 self.aliases[target.id] = qualified
+                self.shadowed_names.discard(target.id)
+            else:
+                self.aliases.pop(target.id, None)
+                self.shadowed_names.add(target.id)
             if file_target is None:
                 self.file_handles.pop(target.id, None)
             else:
@@ -225,6 +253,10 @@ class _BehaviorVisitor(ast.NodeVisitor):
         if isinstance(node.target, ast.Name):
             if qualified:
                 self.aliases[node.target.id] = qualified
+                self.shadowed_names.discard(node.target.id)
+            else:
+                self.aliases.pop(node.target.id, None)
+                self.shadowed_names.add(node.target.id)
             if file_target is None:
                 self.file_handles.pop(node.target.id, None)
             else:
@@ -232,20 +264,47 @@ class _BehaviorVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        previous_handles = self.file_handles
-        self.file_handles = {}
-        self.function_stack.append(node.name)
-        self.generic_visit(node)
-        self.function_stack.pop()
-        self.file_handles = previous_handles
+        self._visit_function(node)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_function(node)
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        previous_aliases = self.aliases
+        previous_shadowed = self.shadowed_names
         previous_handles = self.file_handles
+        inherited_aliases = previous_aliases
+        inherited_shadowed = previous_shadowed
+        if self.class_alias_bases:
+            class_aliases, class_shadowed, function_depth = self.class_alias_bases[-1]
+            if len(self.function_stack) == function_depth:
+                inherited_aliases = class_aliases
+                inherited_shadowed = class_shadowed
+        self.aliases = dict(inherited_aliases)
+        self.shadowed_names = set(inherited_shadowed)
+        for name in _argument_names(node.args):
+            self.aliases.pop(name, None)
+            self.shadowed_names.add(name)
         self.file_handles = {}
         self.function_stack.append(node.name)
         self.generic_visit(node)
         self.function_stack.pop()
+        self.aliases = previous_aliases
+        self.shadowed_names = previous_shadowed
         self.file_handles = previous_handles
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        previous_aliases = self.aliases
+        previous_shadowed = self.shadowed_names
+        self.class_alias_bases.append(
+            (previous_aliases, previous_shadowed, len(self.function_stack))
+        )
+        self.aliases = dict(previous_aliases)
+        self.shadowed_names = set(previous_shadowed)
+        self.generic_visit(node)
+        self.aliases = previous_aliases
+        self.shadowed_names = previous_shadowed
+        self.class_alias_bases.pop()
 
     def visit_With(self, node: ast.With) -> None:
         self._visit_with(node)
@@ -442,10 +501,20 @@ class _BehaviorVisitor(ast.NodeVisitor):
                 "socket.socket",
             }:
                 return factory
+            if factory in {"ssl.SSLContext", "ssl.create_default_context"}:
+                return "ssl.SSLContext"
+            if (
+                factory in {"ssl.wrap_socket", "ssl.SSLContext.wrap_socket"}
+                and node.args
+                and self._qualified_name(node.args[0]) == "socket.socket"
+            ):
+                return "socket.socket"
         return None
 
     def _qualified_name(self, node: ast.AST | None) -> str | None:
         if isinstance(node, ast.Name):
+            if node.id in self.shadowed_names:
+                return f"<local>.{node.id}"
             resolved = self.aliases.get(node.id)
             if resolved is not None:
                 return resolved
@@ -496,8 +565,17 @@ def _has_dataflow_candidate(
     operations_by_function: dict[str, set[str]] = {}
     for event in events:
         operations_by_function.setdefault(event.function, set()).add(event.op)
+    has_outbound_request = any(
+        name in OUTBOUND_REQUEST_CALLS for name in call_names.values()
+    )
     for operations in operations_by_function.values():
         if "NETWORK_SEND" in operations and operations & _DATAFLOW_SEND_SOURCES:
+            return True
+        if (
+            has_outbound_request
+            and "NETWORK_RECEIVE" in operations
+            and operations & _REQUEST_FLOW_SOURCES
+        ):
             return True
         if operations & _DATAFLOW_EXEC_SINKS and operations & _DATAFLOW_EXEC_SOURCES:
             return True
@@ -507,6 +585,12 @@ def _has_dataflow_candidate(
         return False
     operations = set().union(*operations_by_function.values())
     if "NETWORK_SEND" in operations and operations & _DATAFLOW_SEND_SOURCES:
+        return True
+    if (
+        has_outbound_request
+        and "NETWORK_RECEIVE" in operations
+        and operations & _REQUEST_FLOW_SOURCES
+    ):
         return True
     return bool(
         operations & _DATAFLOW_EXEC_SINKS and operations & _DATAFLOW_EXEC_SOURCES

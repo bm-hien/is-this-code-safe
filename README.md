@@ -64,7 +64,9 @@ capability/purpose split, the
 [2026-08-15 MalIR/µMal research note](docs/MALIR_MICRO_RESEARCH_2026-08-15.md)
 for the selected µMal r3 checkpoint, the
 [MalIR 2026-08-15-r4 research note](docs/MALIR_RESEARCH_2026-08-15-r4.md)
-for current deterministic hardening and residual-model evidence, and
+for the first strict deterministic hardening result, the
+[MalIR 2026-08-15-r5 research note](docs/MALIR_RESEARCH_2026-08-15-r5.md)
+for current alias/request hardening and residual-gate evidence, and
 [the research plan](docs/RESEARCH.md) for claim gates.
 
 ## Current capabilities
@@ -86,12 +88,14 @@ for current deterministic hardening and residual-model evidence, and
 - Consults an optional model over normalized effect context. Inside the 20–80
   gate it may raise risk, but it cannot lower the deterministic capability
   score; outside the gate its probability remains advisory.
-- The current deterministic MalIR 2026-08-15-r4 hardening recovers bounded
-  literal-`__import__` encoded execution and staged legacy download-to-execute
-  chains, while restricting credential paths to sensitive environment names.
-  On strict exposed development data, `context-causal-v6` reduces the benign
-  ceiling from 38 to 36 and increases OMC validation malicious alerts from
-  15/53 to 24/53. No sealed holdout/test is used for this claim.
+- The current deterministic MalIR 2026-08-15-r5 hardening includes r4 causal
+  recovery plus scope-safe aliases, conservative verified SSL-socket typing,
+  correct dotted-import binding, and URL/`params` request provenance that
+  deliberately excludes authentication/environment-secret transfer. On strict
+  exposed development data the benign ceiling remains 36 and OMC validation
+  alerts remain 24/53, while malicious groups in the model-consultable 20-36
+  residual region increase from 17 to 20 with benign residual load unchanged
+  at 163 groups. No sealed holdout/test is used for this claim.
 - Includes a dependency-free hashed online logistic classifier.
 - Includes full µMal: a 567,746-parameter behavior Transformer trained from
   scratch with classification, masked-token, paired-ranking, and
