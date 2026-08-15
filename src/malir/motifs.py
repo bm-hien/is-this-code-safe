@@ -9,6 +9,7 @@ from .policy import is_destructive_delete, is_sensitive_env_name
 from .types import BehaviorPath, Event
 
 SOURCE_OPS = {
+    "BROWSER_COOKIE_READ",
     "ENV_READ",
     "SENSITIVE_FILE_READ",
     "FILE_READ",
@@ -27,6 +28,11 @@ class MotifPolicy:
 
 
 MOTIF_POLICIES = {
+    "browser_session_transfer": MotifPolicy(
+        "browser session cookies flow into an outbound transfer",
+        36.0,
+        2.0,
+    ),
     "credential_or_file_exfil": MotifPolicy(
         "sensitive data flows into an outbound transfer",
         36.0,
@@ -112,7 +118,15 @@ def build_behavior_paths(
             ]
             if sink.op == "NETWORK_SEND":
                 for source_index, source in sources[-2:]:
-                    if source.op == "SENSITIVE_FILE_READ" or (
+                    if source.op == "BROWSER_COOKIE_READ":
+                        _append_proximity(
+                            paths,
+                            seen,
+                            exact_endpoints,
+                            "browser_session_transfer",
+                            (source_index, sink_index),
+                        )
+                    elif source.op == "SENSITIVE_FILE_READ" or (
                         source.op == "ENV_READ" and is_sensitive_env_name(source.target)
                     ):
                         _append_proximity(

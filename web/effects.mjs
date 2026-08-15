@@ -1,4 +1,5 @@
 const ORIGINS = Object.freeze({
+  BROWSER_COOKIE_READ: "browser-session",
   ENV_READ: "environment",
   SENSITIVE_FILE_READ: "sensitive-local-file",
   FILE_READ: "local-file",
@@ -24,6 +25,7 @@ const TRANSFORMATIONS = Object.freeze({
 });
 
 const FLOW_BY_MOTIF = Object.freeze({
+  browser_session_transfer: "browser-session-to-network",
   credential_or_file_exfil: "sensitive-data-to-network",
   fingerprinting_transfer: "host-state-to-network",
   file_to_network: "local-file-to-network",
@@ -34,6 +36,10 @@ const FLOW_BY_MOTIF = Object.freeze({
 });
 
 const PURPOSE_BY_MOTIF = Object.freeze({
+  browser_session_transfer: [
+    "sensitive-data-transfer",
+    "browser session cookies appear on an outbound-transfer path",
+  ],
   credential_or_file_exfil: [
     "sensitive-data-transfer",
     "a sensitive source appears on an outbound-transfer path",
@@ -53,6 +59,7 @@ const PURPOSE_BY_MOTIF = Object.freeze({
 });
 
 const LOCAL_TRANSFORM_BLOCKERS = new Set([
+  "BROWSER_COOKIE_READ",
   "NETWORK_RECEIVE",
   "NETWORK_SEND",
   "PROCESS_EXEC",

@@ -37,6 +37,7 @@ _SENSITIVE_MARKERS = {
     "wallet",
 }
 _ORIGINS = {
+    "BROWSER_COOKIE_READ": "browser_session",
     "ENV_READ": "environment",
     "SENSITIVE_FILE_READ": "sensitive_local_file",
     "FILE_READ": "local_file",
@@ -59,6 +60,7 @@ _TRANSFORMATIONS = {
     "UNSAFE_DESERIALIZE": "unsafe_deserialization",
 }
 _FLOW_BY_MOTIF = {
+    "browser_session_transfer": "browser_session_to_network",
     "credential_or_file_exfil": "sensitive_data_to_network",
     "fingerprinting_transfer": "host_state_to_network",
     "file_to_network": "local_file_to_network",
@@ -68,6 +70,7 @@ _FLOW_BY_MOTIF = {
     "destructive_file_action": "code_to_filesystem_delete",
 }
 _PURPOSE_BY_MOTIF = {
+    "browser_session_transfer": "sensitive_data_transfer",
     "credential_or_file_exfil": "sensitive_data_transfer",
     "download_execute": "remote_code_executor",
     "persistence_write": "persistence_modifier",
@@ -86,6 +89,8 @@ def model_target_class(operation: str, target: str) -> str:
     normalized = target.lower().replace("\\", "/").replace(" ", "_")
     if operation in {"NETWORK_SEND", "NETWORK_RECEIVE"}:
         return "network"
+    if operation == "BROWSER_COOKIE_READ":
+        return "browser_session"
     if operation in {"SENSITIVE_FILE_READ", "PERSISTENCE_WRITE"}:
         return "sensitive"
     if operation == "ENV_READ" and is_sensitive_env_name(target):

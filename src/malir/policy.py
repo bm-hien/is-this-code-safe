@@ -118,6 +118,20 @@ CALL_GROUPS: tuple[tuple[frozenset[str], str, str, str], ...] = (
     (
         frozenset(
             {
+                "browser_cookie3.chrome",
+                "browser_cookie3.chromium",
+                "browser_cookie3.edge",
+                "browser_cookie3.firefox",
+                "browser_cookie3.opera",
+            }
+        ),
+        "BROWSER_COOKIE_READ",
+        "source",
+        "browser session cookie access",
+    ),
+    (
+        frozenset(
+            {
                 "base64.b64decode",
                 "base64.urlsafe_b64decode",
                 "binascii.unhexlify",

@@ -14,6 +14,7 @@ from collections.abc import Iterable
 from .types import BehaviorPath, EffectSummary, Event, PurposeCandidate
 
 _ORIGINS = {
+    "BROWSER_COOKIE_READ": "browser-session",
     "ENV_READ": "environment",
     "SENSITIVE_FILE_READ": "sensitive-local-file",
     "FILE_READ": "local-file",
@@ -36,6 +37,7 @@ _TRANSFORMATIONS = {
     "UNSAFE_DESERIALIZE": "unsafe-deserialization",
 }
 _FLOW_BY_MOTIF = {
+    "browser_session_transfer": "browser-session-to-network",
     "credential_or_file_exfil": "sensitive-data-to-network",
     "fingerprinting_transfer": "host-state-to-network",
     "file_to_network": "local-file-to-network",
@@ -45,6 +47,11 @@ _FLOW_BY_MOTIF = {
     "destructive_file_action": "code-to-filesystem-delete",
 }
 _PURPOSE_BY_MOTIF = {
+    "browser_session_transfer": (
+        "sensitive-data-transfer",
+        "high",
+        "browser session cookies reach an outbound transfer",
+    ),
     "credential_or_file_exfil": (
         "sensitive-data-transfer",
         "high",
@@ -67,6 +74,7 @@ _PURPOSE_BY_MOTIF = {
     ),
 }
 _LOCAL_TRANSFORM_BLOCKERS = {
+    "BROWSER_COOKIE_READ",
     "NETWORK_RECEIVE",
     "NETWORK_SEND",
     "PROCESS_EXEC",

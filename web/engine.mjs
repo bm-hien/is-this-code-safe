@@ -47,6 +47,7 @@ def update():
 });
 
 const EVENT_WEIGHTS = Object.freeze({
+  BROWSER_COOKIE_READ: 12,
   DYNAMIC_EXEC: 27,
   CODE_COMPILE: 2,
   PROCESS_EXEC: 18,
@@ -149,6 +150,18 @@ const CALL_RULES = Object.freeze([
     op: "ENV_READ",
     category: "source",
     detail: "environment variable access",
+  },
+  {
+    names: new Set([
+      "browser_cookie3.chrome",
+      "browser_cookie3.chromium",
+      "browser_cookie3.edge",
+      "browser_cookie3.firefox",
+      "browser_cookie3.opera",
+    ]),
+    op: "BROWSER_COOKIE_READ",
+    category: "source",
+    detail: "browser session cookie access",
   },
   {
     names: new Set([
@@ -282,6 +295,7 @@ const PROCESS_PACKAGE_TOOLS = new Set([
 ]);
 
 const SOURCE_OPS = new Set([
+  "BROWSER_COOKIE_READ",
   "ENV_READ",
   "SENSITIVE_FILE_READ",
   "FILE_READ",
@@ -656,6 +670,9 @@ function extractEvents(source, fileName) {
         }
       }
       if (!classified) continue;
+      if (classified.op === "BROWSER_COOKIE_READ") {
+        target = name;
+      }
 
       if (
         classified.op === "FILE_WRITE" &&
@@ -739,7 +756,14 @@ function buildMotifs(events, windowSize = 12) {
 
       if (sink.op === "NETWORK_SEND") {
         for (const source of sources.slice(-2)) {
-          if (
+          if (source.event.op === "BROWSER_COOKIE_READ") {
+            append(
+              "browser_session_transfer",
+              2,
+              "browser session cookies appear near an outbound transfer; browser value flow was not proven",
+              [source.index, sinkIndex],
+            );
+          } else if (
             source.event.op === "SENSITIVE_FILE_READ" ||
             (source.event.op === "ENV_READ" &&
               containsMarker(source.event.target, SENSITIVE_ENV_MARKERS))
@@ -904,6 +928,7 @@ function modelTargetClass(event) {
     .toLowerCase()
     .replaceAll("\\", "/")
     .replaceAll(" ", "_");
+  if (event.op === "BROWSER_COOKIE_READ") return "browser_session";
   if (["NETWORK_SEND", "NETWORK_RECEIVE"].includes(event.op)) return "network";
   if (["SENSITIVE_FILE_READ", "PERSISTENCE_WRITE"].includes(event.op)) {
     return "sensitive";

@@ -25,6 +25,7 @@ from .policy import (
 from .types import Event, FileAnalysis
 
 _DATAFLOW_SEND_SOURCES = {
+    "BROWSER_COOKIE_READ",
     "ENV_READ",
     "SENSITIVE_FILE_READ",
     "FILE_READ",

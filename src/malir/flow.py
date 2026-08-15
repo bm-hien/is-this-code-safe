@@ -19,6 +19,7 @@ Trace = tuple[int, ...]
 Traces = tuple[Trace, ...]
 
 VALUE_SOURCES = {
+    "BROWSER_COOKIE_READ",
     "ENV_READ",
     "SENSITIVE_FILE_READ",
     "FILE_READ",
@@ -979,6 +980,13 @@ class _LocalFlowAnalyzer:
             chain = tuple(index for index in expanded if index >= 0)
             operations = [self.events[index].op for index in chain]
             if sink.op == "NETWORK_SEND":
+                if "BROWSER_COOKIE_READ" in operations:
+                    self._record_from_operation(
+                        "browser_session_transfer",
+                        chain,
+                        {"BROWSER_COOKIE_READ"},
+                        through_summary,
+                    )
                 sensitive_start = next(
                     (
                         index

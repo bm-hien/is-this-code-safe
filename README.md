@@ -68,7 +68,9 @@ for the first strict deterministic hardening result, the
 [MalIR 2026-08-15-r5 research note](docs/MALIR_RESEARCH_2026-08-15-r5.md)
 for alias/request hardening, the
 [MalIR 2026-08-15-r6 research note](docs/MALIR_RESEARCH_2026-08-15-r6.md)
-for current destructuring hardening and residual-confounding evidence, and
+for destructuring hardening and residual-confounding evidence, the
+[MalIR 2026-08-15-r7 research note](docs/MALIR_RESEARCH_2026-08-15-r7.md)
+for current browser-session source/transfer semantics, and
 [the research plan](docs/RESEARCH.md) for claim gates.
 
 ## Current capabilities
@@ -90,14 +92,16 @@ for current destructuring hardening and residual-confounding evidence, and
 - Consults an optional model over normalized effect context. Inside the 20–80
   gate it may raise risk, but it cannot lower the deterministic capability
   score; outside the gate its probability remains advisory.
-- The current deterministic MalIR 2026-08-15-r6 hardening includes r5 alias/
-  request semantics plus exact non-starred tuple/list assignment binding with
-  RHS-before-target evaluation. On strict exposed development data the benign
-  ceiling remains 36 and OMC validation alerts remain 24/53, while malicious
-  groups in the model-consultable 20-36 residual region reach 21 with benign
-  residual load unchanged at 163 groups. The residual-model study also finds a
-  strong package-size/file-count confound, so no new µMal or sparse model is
-  promoted. No sealed holdout/test is used for these claims.
+- The current deterministic MalIR 2026-08-15-r7 hardening includes r6 binding
+  semantics plus a dedicated `BROWSER_COOKIE_READ` origin and
+  `browser_session_transfer` path. Python requires proven value flow for
+  `dataflow:high`; browser MalIR-Lite remains proximity-only. On strict exposed
+  development data the benign ceiling remains 36 and OMC validation alerts
+  remain 24/53, while malicious groups in the model-consultable 20-36 residual
+  region reach 22 with benign residual load unchanged at 163 groups. The
+  residual-model study still shows a package-size/file-count confound, so no new
+  µMal or sparse model is promoted. No sealed holdout/test is used for these
+  claims.
 - Includes a dependency-free hashed online logistic classifier.
 - Includes full µMal: a 567,746-parameter behavior Transformer trained from
   scratch with classification, masked-token, paired-ranking, and

