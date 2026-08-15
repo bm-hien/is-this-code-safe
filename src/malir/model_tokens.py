@@ -19,6 +19,7 @@ _PURPOSE = re.compile(r"^PURPOSE:(?P<label>[^|]+)(?:\|Q:(?P<confidence>[^|]+))?$
 _STRUCTURAL_MOTIFS = {
     "destructive_file_action",
     "install_time_execution",
+    "install_time_network_access",
     "persistence_write",
 }
 _LEGACY_PURPOSE_CONFIDENCE = {"local_code_transformer": "medium"}

@@ -645,3 +645,28 @@ def test_context_causal_scores_browser_session_transfer_by_evidence_strength():
     assert decide([cookie_only], config=config).rule_score == 12
     assert decide([unrelated], config=config).rule_score == 17
     assert decide([exact], config=config).rule_score == 36
+
+
+def test_context_causal_marks_install_time_network_access_without_runtime_uplift():
+    config = CascadeConfig(rule_aggregation="context-causal-v6")
+    install = PythonExtractor().analyze_source(
+        'import requests\nrequests.get("https://example.invalid")\n',
+        "setup.py",
+    )
+    runtime = PythonExtractor().analyze_source(
+        'import requests\nrequests.get("https://example.invalid")\n',
+        "runtime.py",
+    )
+    install_paths = [
+        path
+        for path in install.behavior_paths
+        if path.motif == "install_time_network_access"
+    ]
+    assert len(install_paths) == 1
+    assert install_paths[0].evidence_kind == "structural"
+    assert install_paths[0].confidence == "high"
+    assert decide([install], config=config).rule_score == 20
+    assert decide([runtime], config=config).rule_score == 7
+    assert not any(
+        path.motif == "install_time_network_access" for path in runtime.behavior_paths
+    )

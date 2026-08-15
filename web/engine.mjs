@@ -754,6 +754,20 @@ function buildMotifs(events, windowSize = 12) {
         TRANSFORM_OPS.has(event.op),
       );
 
+      if (
+        ["NETWORK_RECEIVE", "NETWORK_SEND"].includes(sink.op) &&
+        sink.phase === "install"
+      ) {
+        append(
+          "install_time_network_access",
+          20,
+          "network access occurs during package installation",
+          [sinkIndex],
+          "structural",
+          "high",
+        );
+      }
+
       if (sink.op === "NETWORK_SEND") {
         for (const source of sources.slice(-2)) {
           if (source.event.op === "BROWSER_COOKIE_READ") {
@@ -857,7 +871,18 @@ function buildMotifs(events, windowSize = 12) {
 
 function aggregateEvidence(events, motifs, fileName) {
   const raw = [];
-  events.forEach((event) => {
+  const installNetworkCovered = new Set(
+    motifs
+      .filter(
+        (motif) =>
+          motif.motif === "install_time_network_access" &&
+          motif.evidenceKind === "structural" &&
+          motif.confidence === "high",
+      )
+      .flatMap((motif) => motif.eventIndexes),
+  );
+  events.forEach((event, index) => {
+    if (installNetworkCovered.has(index)) return;
     const score = EVENT_WEIGHTS[event.op] || 0;
     if (!score) return;
     raw.push({

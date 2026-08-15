@@ -116,6 +116,18 @@ def build_behavior_paths(
             sources = [
                 (index, event) for index, event in earlier if event.op in SOURCE_OPS
             ]
+            if (
+                sink.op in {"NETWORK_RECEIVE", "NETWORK_SEND"}
+                and sink.phase == "install"
+            ):
+                _append_structural(
+                    paths,
+                    seen,
+                    "install_time_network_access",
+                    20.0,
+                    "network access occurs during package installation",
+                    (sink_index,),
+                )
             if sink.op == "NETWORK_SEND":
                 for source_index, source in sources[-2:]:
                     if source.op == "BROWSER_COOKIE_READ":

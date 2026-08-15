@@ -584,3 +584,30 @@ def run():
   );
   assert.ok(aliased.events.some((event) => event.op === "BROWSER_COOKIE_READ"));
 });
+
+
+test("install-time network access is structural while runtime access is not", () => {
+  const install = analyzeSource(
+    `import requests
+requests.get("https://example.invalid")
+`,
+    "setup.py",
+  );
+  const runtime = analyzeSource(
+    `import requests
+requests.get("https://example.invalid")
+`,
+    "runtime.py",
+  );
+  assert.ok(
+    install.modelTokens.includes(
+      "PATH:install_time_network_access|K:structural|Q:high",
+    ),
+  );
+  assert.equal(install.ruleScore, 20);
+  assert.equal(runtime.ruleScore, 7);
+  assert.equal(
+    runtime.motifs.some((item) => item.motif === "install_time_network_access"),
+    false,
+  );
+});

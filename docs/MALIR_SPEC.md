@@ -164,7 +164,9 @@ bindings; starred or dynamic unpacking remains conservative. MalIR
 2026-08-15-r7 adds a dedicated browser-session cookie origin and a distinct
 browser-session-to-network path. Python only emits causal flow when value
 provenance is proven; browser MalIR-Lite may emit proximity but not causal flow.
-The dated representation also
+MalIR 2026-08-15-r8 adds `install_time_network_access|structural|high` for
+network communication in install phase without assigning malware intent or a
+causal flow. The dated representation also
 distinguishes temporary/user-data/broad deletion targets and compiler/shell/
 interpreter/build/package process targets. Historical V1/V2/V3 checkpoints
 remain loadable, but they do not carry the dated representation guarantees. See
@@ -172,7 +174,8 @@ the [2026-08-15 checkpoint note](MALIR_MICRO_RESEARCH_2026-08-15.md), the
 [r4 research note](MALIR_RESEARCH_2026-08-15-r4.md), the
 [r5 research note](MALIR_RESEARCH_2026-08-15-r5.md), the
 [r6 research note](MALIR_RESEARCH_2026-08-15-r6.md), the
-[r7 research note](MALIR_RESEARCH_2026-08-15-r7.md), and the historical
+[r7 research note](MALIR_RESEARCH_2026-08-15-r7.md), the
+[r8 research note](MALIR_RESEARCH_2026-08-15-r8.md), and the historical
 [V3 training note](MICRO_TRAINING_V3_2026-08-14.md).
 
 See [the bounded-summary design note](BOUNDED_CALL_SUMMARIES.md) for its
