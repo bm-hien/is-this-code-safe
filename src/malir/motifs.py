@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 
-from .policy import is_destructive_delete
+from .policy import is_destructive_delete, is_sensitive_env_name
 from .types import BehaviorPath, Event
 
 SOURCE_OPS = {
@@ -112,7 +112,9 @@ def build_behavior_paths(
             ]
             if sink.op == "NETWORK_SEND":
                 for source_index, source in sources[-2:]:
-                    if source.op in {"ENV_READ", "SENSITIVE_FILE_READ"}:
+                    if source.op == "SENSITIVE_FILE_READ" or (
+                        source.op == "ENV_READ" and is_sensitive_env_name(source.target)
+                    ):
                         _append_proximity(
                             paths,
                             seen,

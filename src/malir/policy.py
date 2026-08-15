@@ -46,6 +46,7 @@ CALL_GROUPS: tuple[tuple[frozenset[str], str, str, str], ...] = (
                 "subprocess.Popen",
                 "os.system",
                 "os.popen",
+                "os.startfile",
                 "commands.getoutput",
             }
         ),
@@ -84,6 +85,7 @@ CALL_GROUPS: tuple[tuple[frozenset[str], str, str, str], ...] = (
                 "httpx.Client.get",
                 "aiohttp.ClientSession.get",
                 "urllib.request.urlretrieve",
+                "urllib.urlopen",
                 "socket.create_connection",
                 "socket.socket.connect",
             }
@@ -203,6 +205,23 @@ def classify_call(name: str) -> tuple[str, str, str] | None:
     return None
 
 
+SENSITIVE_ENV_MARKERS = (
+    "access_key",
+    "api_key",
+    "apikey",
+    "cookie",
+    "credential",
+    "id_ed25519",
+    "id_rsa",
+    "passwd",
+    "password",
+    "private_key",
+    "secret",
+    "token",
+    "wallet",
+)
+
+
 SENSITIVE_PATH_MARKERS = (
     ".ssh",
     "id_rsa",
@@ -317,6 +336,8 @@ def process_target_class(value: str | None) -> str:
     if not value:
         return "generic"
     normalized = value.strip().lower().replace("\\", "/")
+    if not normalized:
+        return "generic"
     head = normalized.split(maxsplit=1)[0].strip("\"'")
     name = head.rsplit("/", 1)[-1]
     serialized_head = name.split("_", 1)[0]
@@ -367,6 +388,10 @@ def contains_marker(value: str | None, markers: Iterable[str]) -> bool:
         return False
     lowered = value.lower().replace("\\", "/")
     return any(marker in lowered for marker in markers)
+
+
+def is_sensitive_env_name(value: str | None) -> bool:
+    return contains_marker(value, SENSITIVE_ENV_MARKERS)
 
 
 def is_sensitive_path(value: str | None) -> bool:

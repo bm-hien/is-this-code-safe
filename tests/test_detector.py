@@ -3,6 +3,7 @@ import pytest
 from malir.detector import CascadeConfig, decide
 from malir.extractor import PythonExtractor
 from malir.model_tokens import canonicalize_model_tokens
+from malir.policy import process_target_class
 from malir.types import BehaviorPath, Event, FileAnalysis
 
 
@@ -488,6 +489,10 @@ def test_low_model_probability_cannot_erase_capability_floor():
     assert result.model_used is True
     assert result.risk_score == result.rule_score
     assert result.verdict == "review"
+
+
+def test_process_target_class_treats_whitespace_as_generic():
+    assert process_target_class("   ") == "generic"
 
 
 def test_model_tokens_distinguish_install_process_target_classes():

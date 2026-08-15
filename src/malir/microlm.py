@@ -228,6 +228,7 @@ def train_micro(
     learning_rate: float = 1e-3,
     mlm_weight: float = 0.05,
     label_smoothing: float = 0.05,
+    positive_class_weight: float | None = None,
     threads: int = 2,
     seed: int = 13,
     *,
@@ -252,6 +253,8 @@ def train_micro(
         raise ValueError("mlm_weight must be between 0 and 1")
     if not 0.0 <= label_smoothing < 1.0:
         raise ValueError("label_smoothing must be in [0, 1)")
+    if positive_class_weight is not None and positive_class_weight <= 0.0:
+        raise ValueError("positive_class_weight must be positive")
     if patience < 1 or minimum_epochs < 1:
         raise ValueError("patience and minimum_epochs must be positive")
     if pair_margin <= 0.0:
@@ -281,7 +284,15 @@ def train_micro(
     model = MicroMal(config)
     tokenizer = HashedTokenizer(config)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-    class_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+    class_weights = (
+        torch.tensor([1.0, positive_class_weight], dtype=torch.float32)
+        if positive_class_weight is not None
+        else None
+    )
+    class_loss = nn.CrossEntropyLoss(
+        weight=class_weights,
+        label_smoothing=label_smoothing,
+    )
     language_loss = nn.CrossEntropyLoss(ignore_index=-100)
     prepared = [(*tokenizer.encode(tokens), label) for tokens, label in examples]
     validation_prepared = (
@@ -443,6 +454,7 @@ def train_micro(
                 else "uncalibrated-no-validation"
             ),
             "label_smoothing": label_smoothing,
+            "positive_class_weight": positive_class_weight,
             "structured_objective": {
                 "pair_constraints": len(train_pairs),
                 "consistency_groups": len(train_groups),

@@ -148,13 +148,17 @@ imported or nested functions, methods, globals, closures, object attributes,
 mutation, generator iteration, async scheduling beyond immediate `await`,
 dynamic dispatch, decorators, exceptions, or other modules. Every path keeps
 its supporting real event indexes for review; the internal call-boundary marker
-is never serialized. Path tokens preserve motif, evidence kind, and confidence. The selected
-checkpoint declares `feature_schema = malir.effect-context.2026-08-15-r3`.
-This dated contract also distinguishes temporary/user-data/broad deletion
-targets and compiler/shell/interpreter/build/package process targets. Historical
-V1/V2/V3 checkpoints remain loadable, but they do not carry the dated
-representation guarantees. See the [2026-08-15 research note](MALIR_MICRO_RESEARCH_2026-08-15.md) and
-the historical
+is never serialized. Path tokens preserve motif, evidence kind, and confidence.
+The selected µMal checkpoint still declares
+`feature_schema = malir.effect-context.2026-08-15-r3`. MalIR 2026-08-15-r4
+additionally hardens literal single-component `__import__` chains, assigned
+file-handle provenance, legacy `urllib.urlopen`/`os.startfile` capabilities, and
+sensitive-environment qualification. The dated representation also distinguishes
+temporary/user-data/broad deletion targets and compiler/shell/interpreter/build/
+package process targets. Historical V1/V2/V3 checkpoints remain loadable, but
+they do not carry the dated representation guarantees. See the
+[2026-08-15 checkpoint note](MALIR_MICRO_RESEARCH_2026-08-15.md), the
+[r4 research note](MALIR_RESEARCH_2026-08-15-r4.md), and the historical
 [V3 training note](MICRO_TRAINING_V3_2026-08-14.md).
 
 See [the bounded-summary design note](BOUNDED_CALL_SUMMARIES.md) for its

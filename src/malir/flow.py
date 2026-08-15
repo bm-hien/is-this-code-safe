@@ -12,6 +12,7 @@ import ast
 from collections.abc import Iterable
 
 from .motifs import make_dataflow_path
+from .policy import is_sensitive_env_name
 from .types import BehaviorPath, Event
 
 Trace = tuple[int, ...]
@@ -241,12 +242,24 @@ class _LocalFlowAnalyzer:
     def _statement(self, node: ast.stmt) -> None:
         if isinstance(node, ast.Assign):
             traces = self._expr(node.value)
+            path_name = self._open_path_name(node.value)
             for target in node.targets:
                 self._assign(target, traces)
+                if isinstance(target, ast.Name):
+                    if path_name is None:
+                        self.file_handles.pop(target.id, None)
+                    else:
+                        self.file_handles[target.id] = path_name
             return
         if isinstance(node, ast.AnnAssign):
             traces = self._expr(node.value) if node.value is not None else ()
             self._assign(node.target, traces)
+            if isinstance(node.target, ast.Name):
+                path_name = self._open_path_name(node.value)
+                if path_name is None:
+                    self.file_handles.pop(node.target.id, None)
+                else:
+                    self.file_handles[node.target.id] = path_name
             return
         if isinstance(node, ast.AugAssign):
             traces = self._merge(self._expr(node.target), self._expr(node.value))
@@ -817,12 +830,25 @@ class _LocalFlowAnalyzer:
         return set()
 
     def _staged_names(self, node: ast.AST) -> set[str]:
-        return {
+        names = {
             child.id
             for child in ast.walk(node)
             if isinstance(child, ast.Name)
             and self.env.get(self._file_stage_key(child.id))
         }
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Constant) or not isinstance(child.value, str):
+                continue
+            normalized = child.value.replace("\\", "/").strip().lstrip("./")
+            if not normalized:
+                continue
+            candidates = {normalized, normalized.rsplit("/", 1)[-1]}
+            names.update(
+                candidate
+                for candidate in candidates
+                if self.env.get(self._file_stage_key(candidate))
+            )
+        return names
 
     @staticmethod
     def _is_process_launcher(node: ast.AST) -> bool:
@@ -877,7 +903,7 @@ class _LocalFlowAnalyzer:
             "Path",
             "pathlib.Path",
         }:
-            return self._name_expression(receiver.args[0])
+            return self._path_expression(receiver.args[0])
         return None
 
     def _open_path_name(self, node: ast.AST) -> str | None:
@@ -886,11 +912,15 @@ class _LocalFlowAnalyzer:
         name = self.call_names.get(id(node), "")
         if name not in {"open", "builtins.open", "io.open"}:
             return None
-        return self._name_expression(node.args[0])
+        return self._path_expression(node.args[0])
 
     @staticmethod
-    def _name_expression(node: ast.AST) -> str | None:
-        return node.id if isinstance(node, ast.Name) else None
+    def _path_expression(node: ast.AST) -> str | None:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value[:240]
+        return None
 
     @staticmethod
     def _file_stage_key(name: str) -> str:
@@ -904,14 +934,23 @@ class _LocalFlowAnalyzer:
             chain = tuple(index for index in expanded if index >= 0)
             operations = [self.events[index].op for index in chain]
             if sink.op == "NETWORK_SEND":
-                if any(
-                    operation in {"ENV_READ", "SENSITIVE_FILE_READ"}
-                    for operation in operations
-                ):
-                    self._record_from_operation(
+                sensitive_start = next(
+                    (
+                        index
+                        for index, event_index in enumerate(chain)
+                        if self.events[event_index].op == "SENSITIVE_FILE_READ"
+                        or (
+                            self.events[event_index].op == "ENV_READ"
+                            and is_sensitive_env_name(self.events[event_index].target)
+                        )
+                    ),
+                    None,
+                )
+                if sensitive_start is not None:
+                    self._record_from_index(
                         "credential_or_file_exfil",
                         chain,
-                        {"ENV_READ", "SENSITIVE_FILE_READ"},
+                        sensitive_start,
                         through_summary,
                     )
                 if "SYSTEM_DISCOVERY" in operations:
@@ -959,6 +998,15 @@ class _LocalFlowAnalyzer:
             for index, event_index in enumerate(chain)
             if self.events[event_index].op in operations
         )
+        self._record_from_index(motif, chain, start, through_summary)
+
+    def _record_from_index(
+        self,
+        motif: str,
+        chain: Trace,
+        start: int,
+        through_summary: bool,
+    ) -> None:
         indexes = chain[start:]
         key = motif, indexes
         if key in self.path_keys or len(self.paths) >= self.max_paths:

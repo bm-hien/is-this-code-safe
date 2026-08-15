@@ -62,7 +62,9 @@ See [MalIR v1](docs/MALIR_SPEC.md) for the language-neutral contract,
 [effect and purpose context](docs/EFFECT_PURPOSE_V1_2026-08-14.md) for the
 capability/purpose split, the
 [2026-08-15 MalIR/µMal research note](docs/MALIR_MICRO_RESEARCH_2026-08-15.md)
-for the current dated representation and checkpoint, and
+for the selected µMal r3 checkpoint, the
+[MalIR 2026-08-15-r4 research note](docs/MALIR_RESEARCH_2026-08-15-r4.md)
+for current deterministic hardening and residual-model evidence, and
 [the research plan](docs/RESEARCH.md) for claim gates.
 
 ## Current capabilities
@@ -84,6 +86,12 @@ for the current dated representation and checkpoint, and
 - Consults an optional model over normalized effect context. Inside the 20–80
   gate it may raise risk, but it cannot lower the deterministic capability
   score; outside the gate its probability remains advisory.
+- The current deterministic MalIR 2026-08-15-r4 hardening recovers bounded
+  literal-`__import__` encoded execution and staged legacy download-to-execute
+  chains, while restricting credential paths to sensitive environment names.
+  On strict exposed development data, `context-causal-v6` reduces the benign
+  ceiling from 38 to 36 and increases OMC validation malicious alerts from
+  15/53 to 24/53. No sealed holdout/test is used for this claim.
 - Includes a dependency-free hashed online logistic classifier.
 - Includes full µMal: a 567,746-parameter behavior Transformer trained from
   scratch with classification, masked-token, paired-ranking, and
@@ -164,7 +172,8 @@ and install-process contrasts with three semantic-context variants per group.
 Exact model-visible representations and group IDs cannot cross the split.
 Older V1/V2/V3 corpora remain historical/compatibility fixtures. These synthetic
 corpora are not evidence of real-world detection quality; see the
-[2026-08-15 research note](docs/MALIR_MICRO_RESEARCH_2026-08-15.md).
+[2026-08-15 checkpoint note](docs/MALIR_MICRO_RESEARCH_2026-08-15.md) and the
+[r4 development study](docs/MALIR_RESEARCH_2026-08-15-r4.md).
 
 ## Browser analyzer
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from .policy import delete_target_class, process_target_class
+from .policy import delete_target_class, is_sensitive_env_name, process_target_class
 from .types import Event
 
 _EVENT = re.compile(
@@ -88,9 +88,7 @@ def model_target_class(operation: str, target: str) -> str:
         return "network"
     if operation in {"SENSITIVE_FILE_READ", "PERSISTENCE_WRITE"}:
         return "sensitive"
-    if operation == "ENV_READ" and any(
-        marker in normalized for marker in _SENSITIVE_MARKERS
-    ):
+    if operation == "ENV_READ" and is_sensitive_env_name(target):
         return "sensitive"
     if operation == "PROCESS_EXEC":
         if target in {

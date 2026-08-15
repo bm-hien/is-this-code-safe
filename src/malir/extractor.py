@@ -456,7 +456,17 @@ class _BehaviorVisitor(ast.NodeVisitor):
             parent = self._qualified_name(node.value)
             return f"{parent}.{node.attr}" if parent else node.attr
         if isinstance(node, ast.Call):
-            return self._qualified_name(node.func)
+            name = self._qualified_name(node.func)
+            if name in {"__import__", "builtins.__import__"} and node.args:
+                module = self._literal(node.args[0])
+                if (
+                    module
+                    and "." not in module
+                    and not module.startswith("<bytes:")
+                    and "<dynamic>" not in module
+                ):
+                    return module
+            return name
         return None
 
     def _literal(self, node: ast.AST | None) -> str | None:

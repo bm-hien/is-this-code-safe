@@ -101,6 +101,7 @@ const CALL_RULES = Object.freeze([
       "subprocess.Popen",
       "os.system",
       "os.popen",
+      "os.startfile",
       "commands.getoutput",
     ]),
     op: "PROCESS_EXEC",
@@ -135,6 +136,7 @@ const CALL_RULES = Object.freeze([
       "httpx.Client.get",
       "aiohttp.ClientSession.get",
       "urllib.request.urlretrieve",
+      "urllib.urlopen",
       "socket.create_connection",
       "socket.socket.connect",
     ]),
@@ -737,7 +739,11 @@ function buildMotifs(events, windowSize = 12) {
 
       if (sink.op === "NETWORK_SEND") {
         for (const source of sources.slice(-2)) {
-          if (["ENV_READ", "SENSITIVE_FILE_READ"].includes(source.event.op)) {
+          if (
+            source.event.op === "SENSITIVE_FILE_READ" ||
+            (source.event.op === "ENV_READ" &&
+              containsMarker(source.event.target, SENSITIVE_ENV_MARKERS))
+          ) {
             append(
               "credential_or_file_exfil",
               2,

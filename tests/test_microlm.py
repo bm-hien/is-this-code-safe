@@ -161,3 +161,35 @@ def test_micro_training_records_paired_semantic_metrics_and_support(tmp_path):
     assert "semantic_variant_drift_max" in result["validation_metrics"]
     assert known["supported"] is True
     assert unknown["abstained"] is True
+
+
+def test_micro_training_records_optional_positive_class_weight(tmp_path):
+    examples = [
+        (["FILE", "O:FILE_READ"], 0),
+        (["FILE", "O:FILE_WRITE"], 0),
+        (["FILE", "O:NETWORK_SEND"], 1),
+    ]
+    checkpoint = tmp_path / "weighted.pt"
+    train_micro(
+        examples,
+        checkpoint,
+        config=MicroConfig(
+            vocab_size=128,
+            max_length=16,
+            d_model=16,
+            n_heads=2,
+            n_layers=1,
+            ffn_dim=32,
+            dropout=0.0,
+        ),
+        positive_class_weight=2.0,
+        epochs=1,
+        batch_size=3,
+        mlm_weight=0.0,
+        threads=1,
+    )
+    stored = torch.load(checkpoint, map_location="cpu", weights_only=True)
+    assert stored["metadata"]["positive_class_weight"] == 2.0
+
+    with pytest.raises(ValueError, match="positive_class_weight"):
+        train_micro(examples, tmp_path / "invalid-weight.pt", positive_class_weight=0)
