@@ -230,38 +230,59 @@ class _BehaviorVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        qualified = self._alias_value(node.value)
-        file_target = self._open_target(node.value)
-        for target in node.targets:
-            if not isinstance(target, ast.Name):
-                continue
-            if qualified:
-                self.aliases[target.id] = qualified
-                self.shadowed_names.discard(target.id)
-            else:
-                self.aliases.pop(target.id, None)
-                self.shadowed_names.add(target.id)
-            if file_target is None:
-                self.file_handles.pop(target.id, None)
-            else:
-                self.file_handles[target.id] = file_target
+        bindings: list[tuple[str, str | None, str | None]] = []
+        if len(node.targets) == 1:
+            target = node.targets[0]
+            if isinstance(target, (ast.Tuple, ast.List)) and isinstance(
+                node.value, (ast.Tuple, ast.List)
+            ):
+                if len(target.elts) == len(node.value.elts) and not any(
+                    isinstance(item, ast.Starred) for item in target.elts
+                ):
+                    bindings.extend(
+                        self._assignment_binding(left, right)
+                        for left, right in zip(
+                            target.elts, node.value.elts, strict=True
+                        )
+                        if isinstance(left, ast.Name)
+                    )
+            elif isinstance(target, ast.Name):
+                bindings.append(self._assignment_binding(target, node.value))
+        else:
+            bindings.extend(
+                self._assignment_binding(target, node.value)
+                for target in node.targets
+                if isinstance(target, ast.Name)
+            )
+        for name, qualified, file_target in bindings:
+            self._apply_assignment_binding(name, qualified, file_target)
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-        qualified = self._alias_value(node.value)
-        file_target = self._open_target(node.value)
         if isinstance(node.target, ast.Name):
-            if qualified:
-                self.aliases[node.target.id] = qualified
-                self.shadowed_names.discard(node.target.id)
-            else:
-                self.aliases.pop(node.target.id, None)
-                self.shadowed_names.add(node.target.id)
-            if file_target is None:
-                self.file_handles.pop(node.target.id, None)
-            else:
-                self.file_handles[node.target.id] = file_target
+            self._apply_assignment_binding(
+                *self._assignment_binding(node.target, node.value)
+            )
         self.generic_visit(node)
+
+    def _assignment_binding(
+        self, target: ast.Name, value: ast.AST | None
+    ) -> tuple[str, str | None, str | None]:
+        return target.id, self._alias_value(value), self._open_target(value)
+
+    def _apply_assignment_binding(
+        self, name: str, qualified: str | None, file_target: str | None
+    ) -> None:
+        if qualified:
+            self.aliases[name] = qualified
+            self.shadowed_names.discard(name)
+        else:
+            self.aliases.pop(name, None)
+            self.shadowed_names.add(name)
+        if file_target is None:
+            self.file_handles.pop(name, None)
+        else:
+            self.file_handles[name] = file_target
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_function(node)

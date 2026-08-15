@@ -445,3 +445,35 @@ def test_dotted_import_binds_top_level_name_without_repeating_submodule():
         receives = [event for event in result.events if event.op == "NETWORK_RECEIVE"]
         assert len(receives) == 1
         assert receives[0].target == "https://x.invalid/a"
+
+
+def test_exact_destructuring_assignment_preserves_callable_aliases():
+    source = """
+runner, text = exec, str
+runner("value = 1")
+"""
+    result = PythonExtractor().analyze_source(source, "destructure.py")
+    assert [event.op for event in result.events].count("DYNAMIC_EXEC") == 1
+
+
+def test_destructuring_resolves_rhs_before_rebinding_targets():
+    source = """
+import socket
+left = socket.socket
+right = object
+left, right = right, left
+right().send(b"hello")
+"""
+    result = PythonExtractor().analyze_source(source, "swap.py")
+    sends = [event for event in result.events if event.op == "NETWORK_SEND"]
+    assert len(sends) == 1
+    assert sends[0].target == "<bytes:5>"
+
+
+def test_starred_destructuring_is_not_assumed_to_be_exact():
+    source = """
+runner, *rest = (exec, str)
+runner("value = 1")
+"""
+    result = PythonExtractor().analyze_source(source, "starred.py")
+    assert "DYNAMIC_EXEC" not in [event.op for event in result.events]
