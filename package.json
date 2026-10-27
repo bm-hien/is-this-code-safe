@@ -11,11 +11,11 @@
     "check:web": "npm run build:web && npm run test:web"
   },
   "devDependencies": {
-    "dompurify": "3.4.13",
+    "dompurify": "3.4.17",
     "esbuild": "0.28.2",
     "monaco-editor": "0.56.0"
   },
   "overrides": {
-    "dompurify": "3.4.13"
+    "dompurify": "3.4.17"
   }
 }
