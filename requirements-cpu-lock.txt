@@ -1,7 +1,7 @@
 # Linux x86-64 / CPython 3.12 snapshot from codespaces-a90760.
 # Core scanning does not need this file.
 --extra-index-url https://download.pytorch.org/whl/cpu
-filelock==3.29.0
+filelock==4.2.1
 fsspec==2026.4.0
 iniconfig==2.3.0
 Jinja2==3.1.6
